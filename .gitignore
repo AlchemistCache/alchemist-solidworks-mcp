@@ -1,0 +1,59 @@
+.claude/
+
+# Upstream dev ledgers (logs/sessions/AGENTS/KNOWN-LIMITATIONS/recipe.md full edition) stay private.
+# Public docs are whitelisted below.
+*.md
+!README.md
+!ROADMAP.md
+!CONTRIBUTING.md
+!README.ru.md
+!README.zh-CN.md
+!THIRD_PARTY_NOTICES.md
+!master-architecture.md
+!architecture.md
+!adapters/claude/guides/*.md
+!docs/*.md
+!skills/*/SKILL.md
+
+# upstream's ci.yml stays local-only; this fork's CI is .github/workflows/tests.yml
+.github/workflows/ci.yml
+
+# --- Build (exe is built on the user's machine by install.ps1 / build.ps1) ---
+.vs/
+[Bb]in/
+[Oo]bj/
+packages/
+*.nupkg
+_roslyn/
+_build/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# --- Local / runtime ---
+*.log
+*.log.[0-9]*
+usage.jsonl
+usage.jsonl.1
+.env
+*.orig
+*.bak
+own_instance.flag
+macros/
+tools/out/
+cleanup_local.ps1
+sample*.gif
+
+dxf-research/
+test/
+scratch/
+drawing-samples/
+Thumbs.db
+.DS_Store
+dist/

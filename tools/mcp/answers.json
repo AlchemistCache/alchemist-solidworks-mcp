@@ -1,0 +1,22 @@
+[
+  ["ensure_ready", {}],
+  ["close_document", {"close_all": true}],
+  ["open_new_part", {}],
+  ["create_sketch", {"plane": "Front Plane"}],
+  ["add_sketch_entity", {"entity_type": "rectangle", "x1": 0, "y1": 0, "x2": 60, "y2": 40}],
+  ["extrude_feature", {"depth": 8}],
+  ["add_plane_angle", {"base_plane": "Top Plane", "angle_deg": 30, "edge_index": 0, "name": "Tilt"}],
+  ["set_part_material", {"material_name": "AISI 1020"}],
+  ["edit_feature", {"feature_name": "Tilt", "action": "suppress"}],
+  ["edit_feature", {"feature_name": "Tilt", "action": "delete"}],
+  ["mass_properties", {}],
+  ["verify_state", {}],
+  ["execute_batch", {"steps": [
+    {"tool": "create_sketch", "args": {"on_face": true, "face_x": 30, "face_y": 20, "face_z": 8}},
+    {"tool": "add_sketch_entity", "args": {"entity_type": "circle", "cx": 30, "cy": 20, "radius": 5}},
+    {"tool": "extrude_feature", "args": {"feature_type": "cut", "through": true}},
+    {"tool": "edit_feature", "args": {"feature_name": "$last.created.0", "action": "rename", "new_name": "Bore"}}]}],
+  ["view_image", {"view": "iso", "size": 300}],
+  ["close_document", {"save": true}, "expect_fail"],
+  ["close_document", {"close_all": true}]
+]

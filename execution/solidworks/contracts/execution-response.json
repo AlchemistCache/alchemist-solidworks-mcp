@@ -1,0 +1,27 @@
+{
+  "_about": "Wire format of POST /api/tool/execute (request {operationId, tool, stateVersion, params, deadlineUtc?}). JSON is camelCase with null fields omitted; source: Models/ExecutionResponse.cs and the Run envelope in Services/SolidWorksService.Envelope.cs. Every CAD outcome is HTTP 200; HTTP 400 only for a malformed request or an unknown tool.",
+  "COMPLETED": {
+    "operationId": "string",
+    "status": "COMPLETED",
+    "verified": true,
+    "stateVersion": "integer: +1 after a mutating tool, unchanged after a read-only one",
+    "cadState": "object, see state-format.json",
+    "result_geometry": "optional: the tool's payload (object or array), e.g. the body summary after a feature or a millimetre tool's JSON result"
+  },
+  "FAILED": {
+    "operationId": "string",
+    "status": "FAILED",
+    "verified": false,
+    "stateVersion": "integer: the current version; +1 when a mutating tool changed the model before it failed (the message then says so and the adapter resyncs)",
+    "error": {
+      "code": "string, one vocabulary (header of SolidWorksService.Envelope.cs): MISSING_PARAMETER, BAD_PARAMETER, NO_ACTIVE_DOCUMENT, NOT_A_PART / NOT_AN_ASSEMBLY / NOT_A_DRAWING / NOT_SHEET_METAL, WRONG_DOCUMENT_TYPE, <THING>_NOT_FOUND, <ACTION>_FAILED, FEATURE_ERROR, INVALID_STATE_VERSION, COM_ERROR, UNEXPECTED_ERROR",
+      "message": "string written for the model: what was wrong and what to do"
+    }
+  },
+  "DUPLICATE": {
+    "operationId": "string",
+    "status": "DUPLICATE",
+    "verified": false,
+    "last_known_state_version": "integer: a replayed operationId of a mutating call is answered, not executed again"
+  }
+}

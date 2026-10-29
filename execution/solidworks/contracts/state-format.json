@@ -1,0 +1,9 @@
+{
+  "_about": "cadState of a COMPLETED response (camelCase; source: Models/CadState.cs). GET /api/tool/state returns the current stateVersion.",
+  "stateVersion": "integer: starts at 0 when the server starts, +1 per completed mutating call",
+  "activeDocument": "string (title) or omitted when no document is open",
+  "documentType": "PART | ASSEMBLY | DRAWING | OTHER, omitted with no document",
+  "activeSketch": "string or omitted",
+  "features": "array of strings: the feature(s) the call created, or a read tool's items; an analyze_* payload is ONE JSON-object string here (the adapter inlines it as JSON)",
+  "dimensions": "array of strings: applied dimensions; a multi-format export_document lists partial failures here"
+}

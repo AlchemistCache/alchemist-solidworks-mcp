@@ -1,0 +1,2064 @@
+{
+ "open_new_part": {
+  "description": "Opens a new part document in SolidWorks, establishing the active document context for subsequent operations.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "template_path": "string (optional — full path to a part template; uses the default part template if omitted)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "open_document": {
+  "description": "Opens an EXISTING file from disk (counterpart to open_new_part, which makes a blank doc). Native .sldprt/.sldasm/.slddrw open directly by type (from the extension). Foreign formats use a STAGED import (2026-07-09, proven live): OpenDoc6 first; on null (with 3D Interconnect issues OpenDoc6 returns errors=2097152 swFileRequiresRepairError even for valid files) fall back to LoadFile4 = the CLASSIC translator (STEP/IGES/NX .prt proven); as a last resort enable Interconnect (toggle 691) and retry once. as_assembly=true (foreign only): an ASSEMBLY STEP - the classic translator would import it as a MULTIBODY PART, so Interconnect is enabled just for that open (toggle restored after). Makes the opened document active and bumps state_version.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "file_path": "string (required — full path to the file to open; .sldprt/.sldasm/.slddrw native, .ipt/.CATPart/STEP/IGES/Parasolid imported as a part via 3D Interconnect)",
+    "as_assembly": "boolean (optional, default false - foreign files only: import an assembly STEP as a real ASSEMBLY via 3D Interconnect instead of the classic multibody-part import; NOTE on this install OpenDoc6-via-Interconnect currently fails with swFileRequiresRepairError - the fallback path for assembly ground truth is per-part import + STEP-parsed placements)"
+   }
+  },
+  "output": "→ see execution-response.json — CadState.ActiveDocument = opened doc title; DocumentType = PART/ASSEMBLY/DRAWING; Features[0] = file name"
+ },
+ "create_sketch": {
+  "description": "Creates a new sketch on a plane OR on an existing model face. Default: plane name. With on_face=true, select the face by face_index (PREFERRED — the i-th face from analyze_model(faces); robust on revolve end-caps where a coordinate pick is ambiguous) or by a point (face_x,face_y,face_z) on the planar face. Enables sketching on existing geometry (e.g. a recess/hub on a part face, a bore on a shaft end). Auto-exits any active sketch first.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "plane": "string (plane mode — e.g. Front Plane, Top Plane, Right Plane, or a named ref plane like Plane1; required unless on_face)",
+    "on_face": "boolean (optional, default false — sketch on a model face instead of a plane)",
+    "face_index": "integer (on_face, PREFERRED — index of the target face from analyze_model(faces); bypasses coordinate picking. Takes priority over face_x/y/z)",
+    "face_x": "number (on_face — X of a point ON the target planar face, meters)",
+    "face_y": "number (on_face — Y of a point ON the target planar face, meters)",
+    "face_z": "number (on_face — Z of a point ON the target planar face, meters)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "add_sketch_entity": {
+  "description": "Adds a sketch entity to the active sketch. Supported types: 'rectangle' (x1,y1,x2,y2), 'circle' (cx,cy,radius), 'line' (x1,y1,x2,y2), 'arc' (x1,y1 start, x2,y2 end, xm,ym mid-arc point), 'arc_center' (cx,cy exact center, x1,y1 start, x2,y2 end, direction +1 CCW/-1 CW — radius-exact, stable for shallow arcs; created with SketchManager.AddToDB=true so SW input inference/snapping cannot skew the radius), 'ellipse' (cx,cy center, x1,y1 major-axis point, x2,y2 minor-axis point), 'spline' (points=[x1,y1,...] through-points), 'fillet' (vx,vy vertex to round, radius), 'chamfer' (vx,vy vertex to cut, distance). Mirror of analyze_model's sketch-segment output (every emitted segment kind maps to an entity_type here). On COMPLETED the response carries result_geometry: the REAL created geometry read back from SW (not the input) for in-band self-verification. New entity types are added at the execution layer without changing this schema.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "entity_type": "string (required: 'rectangle', 'circle', 'line', 'arc', 'arc_center', 'ellipse', 'spline', 'fillet', 'chamfer')",
+    "x1": "number (rectangle/line/arc/arc_center: X of first/start point; ellipse: X of major-axis point)",
+    "y1": "number (rectangle/line/arc/arc_center: Y of first/start point; ellipse: Y of major-axis point)",
+    "x2": "number (rectangle/line/arc/arc_center: X of second/end point; ellipse: X of minor-axis point)",
+    "y2": "number (rectangle/line/arc/arc_center: Y of second/end point; ellipse: Y of minor-axis point)",
+    "xm": "number (arc: X of mid-arc point)",
+    "ym": "number (arc: Y of mid-arc point)",
+    "cx": "number (circle/arc_center/ellipse: center X)",
+    "cy": "number (circle/arc_center/ellipse: center Y)",
+    "radius": "number (circle/fillet: radius)",
+    "vx": "number (fillet/chamfer: X of vertex)",
+    "vy": "number (fillet/chamfer: Y of vertex)",
+    "distance": "number (chamfer: equal distance on both sides)",
+    "direction": "number (arc_center: sweep sense from start to end, +1 CCW / -1 CW; default +1; ignored by other types)",
+    "points": "string (spline: JSON array of flat through-points '[x1,y1,x2,y2,...]', >= 2 points; parsed by the adapter into a number array; ignored by other types)",
+    "construction": "boolean (optional, default false — convert the created entity to CONSTRUCTION/reference geometry; mirrors analyze_model's per-segment 'construction' flag so analyzed construction entities can be reproduced)"
+   }
+  },
+  "output": "→ see execution-response.json (add_sketch_entity additionally returns result_geometry: the real created segment geometry, read-only — does NOT affect state_version)"
+ },
+ "add_sketch_entities": {
+  "description": "Batch form of add_sketch_entity: creates MANY sketch entities in the active sketch in ONE call. 'segments' is an array of entity records, each record = add_sketch_entity's params for one entity (entity_type + its coordinates; per-record 'construction' supported; a spline record's 'points' is a plain number array). Records are created in array order under ONE AddToDB bracket. NOT transactional: on the first failing record the call returns FAILED naming segments[i] and how many earlier records were created (they remain in the sketch); state_version bumps only on COMPLETED. result_geometry echoes a compact {segment_count, counts per entity_type} — no per-segment geometry (use analyze_model sketch mode for exact readback).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "segments": "string (required — JSON array of entity records '[{\"entity_type\":\"line\",\"x1\":0,...},...]'; parsed by the adapter into an object array)"
+   }
+  },
+  "output": "→ see execution-response.json (add_sketch_entities returns result_geometry: {segment_count, counts})"
+ },
+ "add_sketch_constraint": {
+  "description": "Applies a geometric constraint to sketch entities in the active sketch. Single-entity constraints (horizontal, vertical) need only px1/py1. Two-entity constraints (coincident, parallel, perpendicular, tangent, equal, midpoint) also require px2/py2. entity_type1/2 defaults to 'SKETCHSEGMENT'; use 'SKETCHPOINT' for point-based constraints.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "constraint_type": "string (required: 'horizontal', 'vertical', 'coincident', 'parallel', 'perpendicular', 'tangent', 'equal', 'midpoint')",
+    "px1": "number (required — X coordinate of point on first entity)",
+    "py1": "number (required — Y coordinate of point on first entity)",
+    "px2": "number (optional — X coordinate of point on second entity; required for two-entity constraints)",
+    "py2": "number (optional — Y coordinate of point on second entity; required for two-entity constraints)",
+    "entity_type1": "string (optional, default 'SKETCHSEGMENT' — 'SKETCHSEGMENT' or 'SKETCHPOINT')",
+    "entity_type2": "string (optional, default 'SKETCHSEGMENT' — 'SKETCHSEGMENT' or 'SKETCHPOINT')"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "add_dimension": {
+  "description": "Applies a smart dimension to a sketch segment by selecting it via a point on the segment. px/py must lie on or very near the target segment (e.g. the midpoint of a line). This approach works reliably for any sketch geometry, not just simple rectangles. px/py are in the SKETCH frame (mapped to model via the sketch transform); returns result_geometry {dimension, short_name, sketch, type, requested, effective}. (fafolaktik fork fix)",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "px": "number (X coordinate of a point on the target segment, in document units)",
+    "py": "number (Y coordinate of a point on the target segment, in document units)",
+    "value": "number (dimension value in document units)",
+    "label_offset_x": "number (optional, default 0.0 — X offset from px for the dimension label position)",
+    "label_offset_y": "number (optional, default -0.015 — Y offset from py for the dimension label position)",
+    "sketch_name": "string (optional - dimension an EXISTING sketch: opened, dimensioned, closed, rebuilt; blank = active sketch)",
+    "entity_type": "string (optional, default 'segment'): 'segment' | 'point'",
+    "to_origin": "boolean (optional, default false - dimension the entity to the sketch origin)",
+    "orientation": "string (optional, default 'auto'): 'auto' | 'horizontal' | 'vertical' (with to_origin)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "extrude_feature": {
+  "description": "Creates a 3D feature from the active sketch profile. Exits sketch mode automatically. feature_type discriminator: 'boss' (solid extrusion, default), 'cut' (material removal, requires existing solid body), 'revolve' (solid of revolution — requires angle and axis coords), 'revolve_cut' (the same, removing material), 'sweep' (swept solid — requires path_sketch name). A loft is the loft tool.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "depth": "number (required for boss/cut — extrusion/cut depth in document units)",
+    "feature_type": "string (optional, default 'boss': 'boss' | 'cut' | 'revolve' | 'revolve_cut' | 'sweep')",
+    "angle": "number (revolve only — revolution angle in DEGREES, default 360 = full revolve)",
+    "axis_x1": "number (revolve only — X of first endpoint of centerline segment)",
+    "axis_y1": "number (revolve only — Y of first endpoint of centerline segment)",
+    "axis_x2": "number (revolve only — X of second endpoint of centerline segment)",
+    "axis_y2": "number (revolve only — Y of second endpoint of centerline segment; default 0.001)",
+    "path_sketch": "string (sweep only — name of the sketch containing the sweep path)",
+    "reverse": "boolean (boss/cut — flip feature direction; needed for a cut/boss sketched on a part face where material is on the opposite side)",
+    "through": "boolean (boss/cut — through-all end condition; depth ignored)",
+    "up_to_face_index": "integer (optional, default -1 = off; boss/cut — >= 0 selects the UP-TO-SURFACE end condition terminating exactly on that model face; index from analyze_model(faces), same enumeration as create_sketch face_index; depth ignored. The face is append-selected with Mark=1, the FeatureExtrusion3/FeatureCut4 end-condition reference mark)",
+    "mid_plane": "boolean (optional, default false; boss/cut — swEndCondMidPlane: extrudes SYMMETRICALLY about the sketch plane, depth = TOTAL width; conflicts with through/up_to_face_index)",
+    "direction": "array of 3 numbers (optional — boss/cut: the model-space side to build toward; sets reverse from the sketch normal)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "create_rib": {
+  "description": "Creates a RIB feature from the ACTIVE sketch (consumed, like extrude_feature). The profile is OPEN geometry — typically a single line whose extensions hit existing walls (e.g. the diagonal of an L-bracket); SolidWorks extends and thickens it. Uses IFeatureManager.InsertRib (void-returning — creation is verified from the feature tree; a no-op result is retried with the material direction flipped before failing RIB_FAILED). Draft parameters deliberately not exposed in v1.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "thickness": "number (required — rib thickness in meters, > 0)",
+    "two_sided": "boolean (optional, default true — thicken symmetrically on both sides of the sketch; false = single-sided, see reverse_thickness_dir)",
+    "reverse_thickness_dir": "boolean (optional, default false — single-sided only: thicken the opposite side of the sketch normal)",
+    "reverse_material_dir": "boolean (optional, default false — flip which side the rib material fills toward; auto-retry covers a wrong guess)",
+    "is_norm_to_sketch": "boolean (optional, default false — false = extrusion parallel to sketch (classic line rib), true = normal to sketch)"
+   }
+  },
+  "output": "→ see execution-response.json (returns the created rib feature name; result_geometry {volume, faces, edges} after the rib)"
+ },
+ "add_edge_feature": {
+  "description": "Applies a 3D edge modifier to solid body edges. Operates post-extrusion on the solid, NOT on sketch segments. feature_type='fillet': rounds edge(s) with radius_or_distance as radius. feature_type='chamfer': cuts a chamfer — chamfer_type='distance_angle' (setback + angle, default 45°) or 'distance_distance' (D1 + distance2, directional, chamfer_flip swaps sides). PREFERRED edge selection: edge_indices (JSON array of integer indices from analyze_model(edges)) — robust for crowded/concave (inner-corner, small-radius) edges that coordinate picks can't disambiguate. Fallback: ex/ey/ez (single) or edges_json (multiple {ex,ey,ez}).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "feature_type": "string (required: 'fillet' or 'chamfer')",
+    "radius_or_distance": "number (required — fillet radius, or chamfer first-face setback D1, in meters)",
+    "edge_indices": "array (optional, PREFERRED — integer edge indices from analyze_model(edges), e.g. [3,5]; bypasses coordinate picking. Takes priority over edge_points/ex-ey-ez)",
+    "ex": "number (single-edge: X coordinate of point on target edge)",
+    "ey": "number (single-edge: Y coordinate of point on target edge)",
+    "ez": "number (single-edge: Z coordinate of point on target edge)",
+    "edge_points": "array (optional — [[x,y,z], …] meters: a point on each edge for multiple edges; overrides single ex/ey/ez if non-empty)",
+    "chamfer_type": "string (chamfer only: 'distance_angle' (default) | 'distance_distance')",
+    "angle": "number (chamfer distance_angle only: chamfer angle in DEGREES, default 45)",
+    "distance2": "number (chamfer distance_distance only: second-face setback D2 in meters, required > 0 there)",
+    "chamfer_flip": "boolean (chamfer only: swap which face gets D1 vs D2 / flip direction, default false)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "create_drawing": {
+  "description": "Opens a new SolidWorks drawing document (A3 sheet, 1:1 scale). model_path is optional — an empty drawing is created if omitted. add_drawing_view requires the referenced part to be saved to disk.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "model_path": "string (optional — full path to the part/assembly to reference; empty drawing created if omitted)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "add_drawing_view": {
+  "description": "Adds a model projection view to the active drawing sheet. The referenced part must be saved to disk. view_type maps to SolidWorks standard views.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "view_type": "string (required: 'front', 'top', 'right', 'isometric', 'back', 'bottom', 'left')",
+    "pos_x": "number (optional, default 0.1 — X position on drawing sheet in meters)",
+    "pos_y": "number (optional, default 0.1 — Y position on drawing sheet in meters)",
+    "scale": "number (optional, default 1.0 — view scale)",
+    "model_path": "string (optional — full path to part file; auto-detects first open part if omitted)",
+    "display_mode": "string (optional — 'hlv'|'hlr'|'wireframe'|'shaded'|'shaded_edges'|'default'; '' = drafting default: ortho views→HLV, isometric→document default. IView.SetDisplayMode3, swDisplayMode_e)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "add_flat_pattern_view": {
+  "description": "Adds a FLAT PATTERN drawing view of a sheet-metal part (the unfolded blank with bend lines/notes) — the correct, standard way to detail sheet metal (sheet metal is dimensioned on its flat pattern, not the folded views). Uses IDrawingDoc.CreateFlatPatternViewFromModelView3(ModelName, ConfigName, LocX, LocY, LocZ, HideBendLines, FlipView). The part must be sheet metal (have a Flat-Pattern feature) and saved to disk. config_name defaults to the part's active configuration (falls back to 'Default'). Then auto_dimension_drawing places the blank/hole dimensions on it. Bumps state_version; result_geometry echoes {view_name, config, hide_bend_lines}.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "pos_x": "number (optional, default 0.1 — X position on drawing sheet in meters)",
+    "pos_y": "number (optional, default 0.1 — Y position on drawing sheet in meters)",
+    "scale": "number (optional, default 1.0 — view scale)",
+    "model_path": "string (optional — full path to the sheet-metal part; auto-detects first open part if omitted)",
+    "config_name": "string (optional — configuration to flatten; defaults to the part's active configuration, else 'Default')",
+    "hide_bend_lines": "boolean (optional, default false — hide the bend lines in the flat pattern)",
+    "flip_view": "boolean (optional, default false — flip the flat pattern view)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "add_drawing_dimension": {
+  "description": "Applies a smart dimension to a drawing view segment nearest to point (px, py). Same coordinate selection approach as add_dimension but operates in a drawing document. Requires active drawing document.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "px": "number (X coordinate of a point on the target drawing segment, in sheet meters)",
+    "py": "number (Y coordinate of a point on the target drawing segment, in sheet meters)",
+    "value": "number (dimension value in document units)",
+    "label_offset_x": "number (optional, default 0.0)",
+    "label_offset_y": "number (optional, default -0.015)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "auto_dimension_drawing": {
+  "description": "Automatically transfers the MODEL's driving dimensions into the active drawing's views (SolidWorks 'Insert Model Items > Dimensions'). The robust alternative to add_drawing_dimension's fragile coordinate pick: dimensions come straight from the model's parametric dimensions, correctly placed. Uses IDrawingDoc.InsertModelAnnotations3 (Types = swInsertDimensionsMarkedForDrawing, optionally + NotMarkedForDrawing). Bumps state_version; result_geometry echoes inserted_count. Requires an active drawing document with at least one model view.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "all_views": "boolean (optional, default true — insert into all views; false = only the currently selected view)",
+    "include_unmarked": "boolean (optional, default false — also insert driving dims NOT marked for drawing, i.e. ALL driving dims; more complete but noisier. Use if marked-only inserts 0 dims)",
+    "eliminate_duplicates": "boolean (optional, default true — avoid inserting the same model dimension into more than one view)",
+    "view": "string (optional — insert into this view only, by name; all_views becomes false)",
+    "arrange": "boolean (optional, default true — SolidWorks Auto Arrange afterwards: the dimensions are moved off the geometry, linear ones stacked outside the view, radii / diameters out on leaders)",
+    "features": "array of strings (optional — keep only the dimensions of these model features and of their sketches)"
+   }
+  },
+  "output": "→ see execution-response.json — result_geometry holds {inserted_count, all_views, include_unmarked, view?, arranged?, kept_for_features?, left_out?, warning?}. inserted_count = number of dimensions placed (0 is valid; re-try with include_unmarked=true). A drawing never saved gets nothing: warning says to save it first."
+ },
+ "auto_center_marks": {
+  "description": "Automatically places center marks (with extended centerlines) on every hole/slot in every model view of the active drawing (SolidWorks 'Auto Insert > Center Marks', IView.AutoInsertCenterMarks2). Robust and automatic — no coordinate picking (the drawing-side analogue of index-based selection). The difficulty-2 capability a bracket/flange with holes needs on top of auto_dimension_drawing. Bumps state_version; result_geometry echoes the total center-mark count. Requires an active drawing with model views.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "include_slots": "boolean (optional, default true — also add slot center marks/centerlines for linear & arc slots, not just round holes)",
+    "extended_lines": "boolean (optional, default true — draw the extended centerlines through each hole, not just a small cross)"
+   }
+  },
+  "output": "→ see execution-response.json — result_geometry holds {center_marks, views_processed, include_slots}. center_marks = total center marks across all model views (0 if the part has no holes/slots)."
+ },
+ "add_hole_callout": {
+  "description": "Inserts a hole callout (e.g. 'n× ØD THRU') on the hole edge nearest the sheet point (px, py) in the active drawing, via IDrawingDoc.AddHoleCallout2. Coordinate-based — same fragile point pick as add_drawing_dimension (KNOWN-LIMITATIONS #6); prefer auto_center_marks for centerlines and use this for explicit per-hole callouts. Bumps state_version. Requires an active drawing.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "px": "number (X coordinate of a point on the target hole's projected circular edge, in sheet meters)",
+    "py": "number (Y coordinate of a point on the target hole's projected circular edge, in sheet meters)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "add_section_view": {
+  "description": "Creates a SECTION VIEW to expose internal/blind features (e.g. a blind pocket's depth) as visible, dimensionable edges — the difficulty-3 capability. Two ways to define the cut: EDGE mode (edge_x,edge_y → cut ALONG an existing projected edge, best when a real edge lies on the desired plane) or LINE mode (x1,y1,x2,y2 → draw a cut line, best for cutting THROUGH a feature's interior such as a pocket middle where no edge exists). IDrawingDoc.CreateSectionViewAt5 (with a CreateSectionViewAt2 fallback) places the section at (px,py). Bumps state_version. NOTE: coordinate-based (#6); after it lands, re-run auto_dimension_drawing or add_drawing_dimension to dimension the now-visible depth. Repeated failed attempts can wedge section creation — restart on a clean drawing state.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "edge_x": "number (EDGE mode: X of a point on an existing straight projected edge to cut along, sheet meters)",
+    "edge_y": "number (EDGE mode: Y of that point, sheet meters)",
+    "x1": "number (LINE mode: cut line start X, sheet meters)",
+    "y1": "number (LINE mode: cut line start Y, sheet meters)",
+    "x2": "number (LINE mode: cut line end X, sheet meters)",
+    "y2": "number (LINE mode: cut line end Y, sheet meters)",
+    "px": "number (section-view placement X, sheet meters — which side the section projects to)",
+    "py": "number (section-view placement Y, sheet meters)",
+    "label": "string (optional, default 'A' — section label, e.g. 'A' → 'SECTION A-A')",
+    "flip": "boolean (optional, default false — reverse the cut/viewing direction)",
+    "scale": "number (optional — section view scale; inherits the parent's if omitted)"
+   }
+  },
+  "output": "→ see execution-response.json — result_geometry holds {section_view, label}."
+ },
+ "verify_state": {
+  "description": "Reads and returns the current CAD state without modifying the document, used to confirm expected state before or after operations.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {}
+  },
+  "output": "→ see execution-response.json"
+ },
+ "ensure_ready": {
+  "description": "Lifecycle/bootstrap — NOT a state-versioned CAD op. Served on its own POST /ensure_ready route (not /api/tool/execute), so it carries no operation_id/state_version. Ensures the execution server is running and SolidWorks is attached, launching SolidWorks via COM ONLY when no SLDWORKS process exists at all. Does NOT open or create any document. Does NOT increment state_version. SINGLE-INSTANCE DISCIPLINE (2026-07-30, KNOWN-LIMITATIONS #14): a failed COM attach does not mean SolidWorks is absent — a running instance can be missing from the Running Object Table (still starting up, or at a different integrity level because one side is elevated). When a process exists but the attach fails, this retries the attach for 30s and then FAILS with a diagnostic naming the PIDs and the likely cause, rather than launching a duplicate. While the server's own hidden SolidWorks shows a dialog (GET /health then answers dialogs — and busy / busySeconds of a call in progress — at once, off the STA thread, without a COM probe) this answers BUSY naming it; close_dialogs=true first closes them (POST /close_dialogs: Cancel / No first, own-instance mode only).",
+  "input": {
+   "params": {
+    "close_dialogs": "boolean (optional, default false — first close the dialogs the server's own hidden SolidWorks shows; the call they held ends)"
+   }
+  },
+  "output": "{ status, comAttached, swLaunched, activeDocument, swVersion, stateVersion, dialogsClosed? } (or comAttached=false + launchError/ensureError on failure; ensureError also carries solidworksProcessCount when the attach failed while a process was running)"
+ },
+ "export_document": {
+  "description": "Exports the active SolidWorks document without closing it: to file_path (format from its extension), or with 'formats' one file per format — file_path with the extension replaced; partial failures are listed in cadState.dimensions ('partial_failures: …'). DWG/DXF require an active drawing document. PDF uses SolidWorks PDF export options. state_version is NOT incremented.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "file_path": "string (required — full output path; a path without extension gets the format's)",
+    "formats": "array of string (optional — 'STEP' | 'IGES' | 'STL' | 'PDF' | 'DWG' | 'DXF'; several = one file each; empty = from the file_path extension: .step/.stp, .igs/.iges, .stl, .pdf, .dwg, .dxf)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "close_document": {
+  "description": "Closes the active SolidWorks document (optionally saving first — a failed save is an error and the document stays open), ALL documents (close_all), or a set: the given titles, or hidden_only = every invisible component document; in a set a modified document is skipped unless include_modified.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "save": "boolean (true to save before closing — NOT_SAVED if the document has no file, SAVE_FAILED if the save fails; false discards changes)",
+    "close_all": "boolean (optional, default false - close ALL open documents incl. invisibly-loaded component docs via CloseAllDocuments(true); a per-active-doc close loop can never reach those, and a lingering same-TITLE doc blocks opening another folder's part (error 65536) and locks files",
+    "titles": "array of string (optional — close just these open documents)",
+    "hidden_only": "boolean (optional, default false — close every invisible background document)",
+    "include_modified": "boolean (optional, default false — titles/hidden_only: close modified documents too, discarding their changes)"
+   }
+  },
+  "output": "→ see execution-response.json; a titles/hidden_only close returns result_geometry {closed_count, closed, skipped}"
+ },
+ "save_document": {
+  "description": "Saves the active SolidWorks document to disk. With file_path, does a SaveAs to that path (creating the directory); without it, an in-place Save (only if the document already has a path). Does NOT increment state_version (no geometry change). A part must be saved to disk before a drawing view can reference it.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "file_path": "string (optional — full output path incl. extension: .sldprt/.sldasm/.slddrw; in-place save if omitted)",
+    "save_all": "boolean (optional, default false — also save the modified documents it references)",
+    "copy_only": "boolean (optional, default false — Save As writes a copy; the open document and assemblies stay as they are)",
+    "repoint_assemblies": "boolean (optional, default false — Save As of a document open assemblies use: make them use the new file)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "analyze_model": {
+  "description": "Analyzes the active part document without modifying it. Does NOT increment state_version. analysis_type='mass_properties' (internal reads of the adapter — the MCP tool for it is mass_properties): returns volume, surface_area, center of gravity (cx/cy/cz) in SI. analysis_type='geometry': returns bodies, faces, edges, vertices counts. analysis_type='edges': returns one JSON object listing every solid edge with start/end/midpoint 3D coords (meters, rounded to 6 decimals; closed/circular edges also include length) — pick an edge index (the `i` field) for add_edge_feature edge_indices, or a midpoint for coordinate selection. Slowest mode on very large parts (COM-bound). analysis_type='faces': returns one JSON object listing every solid face with a stable index `i` (planar faces also carry normal, area, and a representative on-plane point) — pick a face index for create_sketch(on_face, face_index). analysis_type='features': the COMPACT part recipe (default 'understand the part' read) — ordered feature tree (name/type, suppressed only when true), deduped driving dimensions (SI, rounded to 6 decimals), a per-sketch SUMMARY (segment counts + an inline {cx,cy,r} for single-full-circle profiles; NO per-segment coordinate dump), each sketch's plane {ref:'Front/Top/Right Plane', offset}, each extrude/cut's {end, depth (blind only), reversed}, pattern semantics, and equations + globals; features are in tree (history) order. analysis_type='sketch' (requires 'name'): ONE sketch's full geometry (every segment, rounded to 6 decimals) + plane — use only when exact sketch coordinates are needed. analysis_type='feature_map': per-feature geometry ATTRIBUTION — walks the tree base→end with the ROLLBACK BAR (swMoveRollbackBarTo_e) and diffs the topology between stops inside the tool; consumed_edges (both endpoints gone — trimmed neighbours excluded) are the deterministic fillet/chamfer edge anchors (PRE-feature geometry), created_faces are genuinely new surfaces (trimmed existing planes excluded). Non-destructive: the bar is restored to the end in finally; nothing is saved.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "analysis_type": "string (required: 'mass_properties', 'geometry', 'bodies', 'bbox', 'edges', 'faces', 'features', 'sketch', or 'feature_map')",
+    "name": "string (required only for analysis_type='sketch' — the sketch feature name, e.g. 'Sketch2')",
+    "from_feature": "string (optional, feature_map only — start the walk at this tree feature name; default = tree base)",
+    "to_feature": "string (optional, feature_map only — end the walk at this tree feature name; default = tree end)",
+    "near": "string (optional, edges/faces only — JSON '[x,y,z]' in meters; return only entities nearest this point instead of the full dump, each annotated with dist and its stable index i; blank = full dump, backward compatible)",
+    "k": "integer (optional, edges/faces only — keep only the k nearest to 'near'; 0 = no cap)",
+    "axis": "string (optional, edges/faces only — JSON '[x,y,z]'; keep only entities whose direction is ~parallel to axis: faces filter by planar NORMAL, edges by chord direction)"
+   }
+  },
+  "output": "→ see execution-response.json — results encoded in CadState.Features list. mass_properties/geometry: flat 'key=value' strings. edges: a single JSON string {edge_count, edges:[{i,start,end,mid}]} (closed/circular edges also carry length). faces: a single JSON string {face_count, faces:[{i, planar, area, normal?, point?}]} (normal/point only for planar faces). features: a single consolidated JSON string {feature_count, features[], equations[]} — sketches carry a summary (counts [+circle]); NO raw segments. sketch: a single JSON string {name, sketch:{counts, segments[]}, plane} for the one named sketch. feature_map: a single JSON string {feature_count, map:[{feature, type, suppressed?, delta:{faces,edges,vertices}, consumed_edges:[{mid,len}], created_faces:[{point, normal?, planar, area}]}]} — coords in meters rounded to 6 decimals; delta/consumed/created present only for unsuppressed solid-affecting features (sketches/ref geometry are listed name+type only)."
+ },
+ "analyze_drawing": {
+  "description": "[ADAPTER-ONLY — no C# case] Reads a 2D technical drawing (.DXF or .DWG; a DWG is converted automatically) completely and returns {source, advisories, next, analysis}: the WHOLE `draw`-dialect artifact for the model to build the part from with the ordinary tools; the reading decisions are in tool_help('reading_drawings'). SINGLE HOME FOR THE PAYLOAD LEGEND (2026-09-07, payload phase 5): this tool's model-facing docstring in server.py documents what every field MEANS — the edge classes, the class-grouped index-carrying `lines`, `open_singles`, `seq`, the ellipse provenance, the graded alignment, `tier`, `printed`/`printed_mismatch`/`kind_from`/`measures` — because that description reaches the model with the tool itself; the DECISIONS made with those numbers are tool_help('reading_drawings').",
+  "input": {
+   "operation_id": "n/a at this level - the DWG->DXF conversion calls carry their own operation_id (uuid4) on /api/tool/execute; a .DXF input touches no execution tool at all",
+   "state_version": "n/a at this level - the underlying open/export/close calls thread the adapter's tracked state_version (one-shot resync-retry on INVALID_STATE_VERSION)",
+   "params": {
+    "file_path": "string (required - absolute path to the .DXF or .DWG technical drawing)",
+    "save_analysis": "boolean (optional, default false - true also writes <name>.analysis-v<version>.json beside the source as a research artifact; same version overwrites)"
+   }
+  },
+  "output": "string: {source {file, sha256}, advisories, next, analysis} — analysis = {analysis_version, source, config, sheet (incl. not_read), frame, views[] (each with geometry{lines as {class: [[index,x1,y1,x2,y2],...]}, arcs, circles, ellipses?}, loops[], open_chains[] (multi-segment), open_singles[]?), alignment[], view_graph?, dimensions[], bend_notes[], notes[], frame_notes[], user_description}."
+ },
+ "check_drawing": {
+  "description": "TEST/REFERENCE ONLY (renamed from analyze_drawing 2026-07-27; a .SLDDRW is SLDPRT-linked and nobody ships one — the shipping reverse path is being rebuilt on DXF/DWG). Analyzes the active NATIVE SolidWorks DRAWING document without modifying it (read-only, does NOT increment state_version). Walks the views (IDrawingDoc.GetFirstView/GetNextView; the first view is the SHEET) and reports each view's name, type (swDrawingViewTypes_e int), scale, sheet position, and its display dimensions (full-name + SI value). Feeds the objective Stage-1 check (do a produced drawing's dims match the model?) and the Stage-2 re-modeling input.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "include_geometry": "boolean (optional, default false — also return each view's projected 2D geometry as clean primitives geometry:{lines, curves, frame} via IView.GetPolylines7, for reverse-engineering a part from its drawing independent of dimension clutter; coords in model-scale meters centered on the view, z=0; line segments carry the up/down / which-face profile structure a dim value can't)",
+    "include_relations": "boolean (optional, default false — Batch-4 deterministic enrichment; forces include_geometry on. ADDITIVE only (raw geometry arrays are never replaced): per-view relation GROUPS, cross-view station join keys, dimension→primitive attachment, and center-mark/centerline annotations. Every relation/group names its deterministic 'source' from the CLOSED enum {center_coincide, radius_equal, dist_eq_radius_sum, dist_eq_radius_diff, line_dist_eq_radius, shared_endpoint, endpoint_on_curve, anchor_at_center, anchor_on_primitive} plus 'residual' = the max measured deviation in meters (6dp, computed on unrounded values) — a relation that cannot name a source is never emitted. Tolerance 1e-5 m (10µm) at model scale. No confidence scores, no inference fields; cross-view output is join keys + CANDIDATE sets, never same-entity conclusions. X-crossings of projected edges are DELIBERATELY not reported (a 2D crossing carries no same-depth guarantee); centerlines are read from the view's centerline sketch — when the view reports centerlines but exposes no readable segments, a loud {centerlines_reported, unreadable:true} entry is emitted instead of a heuristic guess.)"
+   }
+  },
+  "output": "→ see execution-response.json — CadState.Features holds a single JSON string {view_count, dimension_count, views:[{name, type, scale, pos:[x,y], dimensions:[{name, value_si}], geometry?:{lines:[{x1,y1,x2,y2}], curves:[{n,x1,y1,xm,ym,x2,y2}], frame}}]}. view[0] is the drawing sheet. value_si in meters/radians, rounded to 6 decimals. geometry present only when include_geometry=true. Every computed geometry/section frame also carries normal_axis (the view's viewing direction snapped to a SIGNED principal axis, e.g. 'Y'/'-Z'; omitted when not axis-aligned) — drafting semantics: a CIRCLE in a view is the cross-section of a feature whose axis runs along that view's normal, so circles in different-normal_axis views are DIFFERENT features unless a section proves otherwise. An axis-aligned view's geometry also carries extent {axis:[min,max]} — the SERVER-computed model-space span of ALL that view's primitives along its two resolved axes (frame signs applied; exact circle/arc extremes included). Read extent BEFORE any 'no material beyond X' conclusion — never re-derive a view's span client-side from raw v-coordinates (the frame's direction components can be negative). include_relations=true ADDS (ids are POSITIONAL and per-read: view alias vid='v<views[] index>'; within a view l<i>=geometry.lines[i], a<i>=geometry.curves[i], c<i>=geometry.circles[i]; a re-read after a drawing edit may renumber): per view — vid; relations:{concentric:[{members, center:[x,y], radii[], source:'center_coincide', residual}], equal_diameter:[{members, r, centers[[x,y]..], source:'radius_equal', residual}] (full circles, same Ø, distinct centers), tangent:[{members:[2], at:[x,y], source:'dist_eq_radius_sum'|'dist_eq_radius_diff'|'line_dist_eq_radius', residual}], touches:[{at:[x,y], members, source:'shared_endpoint'|'endpoint_on_curve', residual}]} (empty buckets dropped); center_marks:[{at:[u,v], on:[circle ids], source:'center_coincide', residual} | {at, unmatched:true}]; centerlines:[{x1,y1,x2,y2, through?:[circle ids], source?, residual?}]; per dimension — measures:[primitive ids], measure_src:'anchor_at_center'|'anchor_on_primitive', measure_residual, unmatched_anchors? — or unattached:true when NO primitive resolves (loud, never dropped/guessed). At root — stations:{tol, axes:[{axis:'X'|'Y'|'Z', values:[{v, members:{vid:[ids]}, residual}]}], skipped_views?:[vids]}: per-axis model-coordinate JOIN KEYS from circle centers/extents, line endpoints/constant coords, arc centers/endpoints — only values shared by ≥2 views are listed; members are CANDIDATES (resolve identity via dimensions; >1 candidate = visible ambiguity); relations_skipped_views lists views with no usable transform."
+ },
+ "get_selection": {
+  "description": "Reports what the USER currently has selected in the SolidWorks GUI — the inverse of index-based selection. When the user clicks a face/edge/vertex/plane in the window (e.g. while describing what to do), this returns each selected entity mapped to the SAME stable index analyze_model(faces/edges) uses, so the AI knows exactly which geometry the user means. A selected FACE → {type:'face', i, planar, normal?, area, point?} → feed i to create_sketch(on_face=true, face_index=i). A selected EDGE → {type:'edge', i, start, end, mid} → feed i to add_edge_feature(edge_indices='[i]'). Also reports vertices (point) and reference planes (name). Read-only: does NOT change state_version and does NOT clear the selection — but call it BEFORE any tool that clears the selection (create_sketch/add_edge_feature/extrude cut, etc.).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {}
+  },
+  "output": "→ see execution-response.json — results encoded in CadState.Features as a single JSON string {selected_count, selection:[{type, i?, ...geometry}]}. type ∈ face|edge|vertex|plane|other. face carries i/planar/area/normal?/point?; edge carries i/start/end/mid(+length if closed); vertex carries point; plane carries name. i = -1 if the selected face/edge could not be matched to a solid-body index."
+ },
+ "edit_sketch": {
+  "description": "Reopens an existing sketch feature for editing. Counterpart to create_sketch. Returns COMPLETED with ActiveSketch set to the sketch name. Exit by calling extrude_feature or any feature tool (which exits sketch mode automatically).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "sketch_name": "string (required — exact sketch feature name, e.g. 'Sketch1')"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "add_reference_geometry": {
+  "description": "Creates reference geometry in the active part. type='plane': offset plane from ref_plane_name by offset (meters). type='axis': axis at intersection of two planes/edges (entity1_name/type and entity2_name/type). type='point': reference point at a vertex (px, py, pz).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "type": "string (required: 'plane', 'axis', or 'point')",
+    "ref_plane_name": "string (plane only — base plane name, e.g. 'Front Plane')",
+    "offset": "number (plane only — offset distance in meters)",
+    "entity1_name": "string (axis only — first plane or edge name)",
+    "entity1_type": "string (axis only — 'PLANE' or 'EDGE', default 'PLANE')",
+    "entity2_name": "string (axis only — second plane or edge name)",
+    "entity2_type": "string (axis only — 'PLANE' or 'EDGE', default 'PLANE')",
+    "px": "number (point only — X coordinate of vertex)",
+    "py": "number (point only — Y coordinate of vertex)",
+    "pz": "number (point only — Z coordinate of vertex)"
+   }
+  },
+  "output": "→ see execution-response.json — created feature name in CadState.Features[0] (e.g. 'Plane1', 'Axis1')"
+ },
+ "create_pattern": {
+  "description": "Creates a linear, circular, or mirror feature pattern. pattern_type='linear': repeats feature along X/Y/Z direction. pattern_type='circular': repeats feature around a named axis. pattern_type='mirror': mirrors one or more FEATURES about a plane (InsertMirrorFeature2; selection marks features=1, plane=2 per the local CHM). Seed feature must be a solid feature (e.g. 'Boss-Extrude1'). Circular pattern requires a reference axis created with add_reference_geometry.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "pattern_type": "string (required: 'linear', 'circular', or 'mirror')",
+    "feature_name": "string (linear/circular: required seed feature name, e.g. 'Boss-Extrude1'; mirror: single-feature shorthand for features)",
+    "spacing": "number (linear only — spacing between instances in meters, default 0.01)",
+    "count": "integer (number of instances including seed, default 2)",
+    "direction": "string (linear only — 'X', 'Y', or 'Z', default 'X')",
+    "flip": "boolean (linear only, default false — pattern toward the NEGATIVE axis; FeatureLinearPattern3's FlipDir1, exposed v0.7.0)",
+    "count2": "integer (linear only — accepted but NON-FUNCTIONAL: no second-direction entity is wired to FeatureLinearPattern3 (recorded gap, 2026-07-16); compose a grid as a pattern OF a pattern instead. Default 1)",
+    "spacing2": "number (linear only — see count2: non-functional until D2 is wired, default 0.01)",
+    "axis_name": "string (circular only — reference axis name, e.g. 'Axis1')",
+    "angle": "number (circular only — degrees; with equal_spacing=true this is the TOTAL spread (use 360 for a full ring), with equal_spacing=false it is the angle BETWEEN adjacent instances)",
+    "equal_spacing": "boolean (circular only, default true — true: angle=total spread, evenly divided; false: angle=per-instance spacing, may wrap/overlap)",
+    "features": "array (mirror only — feature tree names to mirror, e.g. [\"Edge-Flange1\",\"Sketched Bend2\"])",
+    "plane": "string (mirror only — mirror plane name; canonical English default-plane names resolve on any localization; default 'Right Plane')",
+    "geometry_pattern": "boolean (mirror only, default false — true mirrors geometry without solving each feature)"
+   }
+  },
+  "output": "→ see execution-response.json — created pattern feature name in CadState.Features[0]"
+ },
+ "set_part_material": {
+  "description": "Assigns a material to the active part document (all configurations). Applied material appears in Mass Properties and the feature tree. Requires a part document — not a drawing.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "material_name": "string (required — EXACT library name, e.g. '1060 Alloy' (NOT 'Aluminum 1060 Alloy'), 'AISI 1020', 'ABS', 'Nylon 6/10')",
+    "library": "string (optional, default 'SolidWorks Materials' — material database name)"
+   }
+  },
+  "output": "→ see execution-response.json — applied material and library in CadState.Features"
+ },
+ "sheet_metal_feature": {
+  "description": "Creates sheet metal features on the active part. feature_type='base_flange': converts active sketch profile to sheet metal base (exits sketch automatically). feature_type='edge_flange': adds a default-profile flange to an edge — select it by edge_index (preferred) or a point (ex,ey,ez). feature_type='sketched_bend': bends the sheet about the bend line(s) in the ACTIVE sketch (IFeatureManager.InsertSheetMetal3dBend, CHM-verified; the pre-selected FIXED face stays put — pick it by fixed_face_index (analyze faces numbering, preferred) or fixed_x/y/z; a sketch with multiple bend lines yields one feature with one bend per line). feature_type='flat_pattern': unfolds all bends (requires existing base_flange).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "feature_type": "string (required: 'base_flange', 'edge_flange', 'edge_flange_sketch', 'edge_flange_finish', 'flat_pattern', or 'sketched_bend')",
+    "thickness": "number (base_flange — sheet thickness in meters, default 0.001)",
+    "bend_radius": "number (base_flange/sketched_bend — bend radius in meters, default 0.001; sketched_bend ignores it when use_default_radius=true)",
+    "k_factor": "number (base_flange — K-factor for bend allowance, default 0.5)",
+    "ex": "number (edge_flange — X coordinate of point on target edge)",
+    "ey": "number (edge_flange — Y coordinate of point on target edge)",
+    "ez": "number (edge_flange — Z coordinate of point on target edge)",
+    "flange_length": "number (edge_flange — flange length in meters, default 0.02)",
+    "angle": "number (edge_flange/sketched_bend — bend angle in degrees, default 90.0)",
+    "use_default_radius": "boolean (sketched_bend only, default false — true uses the sheet's default bend radius)",
+    "flip": "boolean (sketched_bend only, default false — reverse the bend direction)",
+    "bend_position": "string (sketched_bend only — 'centerline' (default), 'material_inside', 'material_outside', or 'bend_outside'; matches the `position` analyze_model(features) reports on an SM3dBend)",
+    "fixed_face_index": "integer (sketched_bend, optional — the FIXED face's index from analyze_model(faces); preferred over fixed_x/y/z)",
+    "fixed_x": "number (sketched_bend — X of a 3D point ON the fixed face, meters)",
+    "fixed_y": "number (sketched_bend — Y of a 3D point ON the fixed face, meters)",
+    "fixed_z": "number (sketched_bend — Z of a 3D point ON the fixed face, meters)",
+    "reverse_thickness": "boolean (base_flange only, default false — thicken to the OPPOSITE side of the sketch plane; derive from which side the original blank's faces sit, e.g. feature_map's SMBaseFlange created faces)",
+    "symmetric_thickness": "boolean (base_flange only, default false — thicken BOTH ways off the sketch plane (±t/2, mid-plane style); reproduce the original's own flag — it also sets the intrinsic sheet orientation downstream bend directions fold against)",
+    "clear_profile": "boolean (edge_flange_sketch only, default true — wipe the generated default rectangle so the caller redraws the ORIGINAL's custom profile via add_sketch_entity; the op leaves the generated sketch ACTIVE and echoes its MEASURED frame in result_geometry, then edge_flange_finish creates the flange from it — SW's documented custom-profile flow; the flange API accepts only a sketch IT generated)",
+    "edge_index": "integer (edge_flange/edge_flange_sketch/edge_flange_finish, optional — the attach edge's stable index from analyze_model(edges); PREFERRED over ex/ey/ez, whose coordinate pick can miss a real edge (KNOWN-LIMITATIONS #6). Since v0.7.0 the simple edge_flange accepts it too (shared SelectFlangeEdge). For the two-call custom-profile flow pass the SAME index to both calls — the sketch step adds no solid geometry, so edge enumeration is stable)",
+    "depth": "number (optional, SI m — base_flange from an OPEN profile: its length along the sketch normal; required there)",
+    "mid_plane": "boolean (optional, default false — base_flange open profile: depth centred on the sketch plane)"
+   }
+  },
+  "output": "→ see execution-response.json"
+ },
+ "modify_dimension": {
+  "description": "Universal parametric edit: sets a named display dimension's value in SI units (meters for length, radians for angle), rebuilds, and bumps state_version. Pairs with analyze_model(features), which reports each feature's dimension full-names + SI values. The keystone for building variants.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "name": "string (required — dimension full-name exactly as analyze_model(features) reports it, e.g. 'D1@Boss-Extrude1@Part.Part')",
+    "value": "number (required — new value in SI: meters for length/distance, radians for angle)"
+   }
+  },
+  "output": "→ see execution-response.json (additionally returns result_geometry {dimension, requested, effective}: the value read back from SolidWorks after rebuild, for in-band verification)"
+ },
+ "edit_feature": {
+  "description": "Discriminated structural edit of a named feature: suppress | unsuppress | delete | rename. Each rebuilds and bumps state_version. NOTE: suppress/delete change topology, so earlier coordinate/edge/face selections may no longer resolve — re-query analyze_model afterwards.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "feature_name": "string (required — exact feature-tree name, e.g. 'Boss-Extrude1')",
+    "action": "string (required: 'suppress', 'unsuppress', 'delete', or 'rename')",
+    "new_name": "string (required only for action='rename' — the new feature name)",
+    "with_children": "boolean (optional, default false — delete also the features that depend on it)"
+   }
+  },
+  "output": "→ see execution-response.json — CadState.Features[0] holds the (possibly renamed) feature name (delete works for any feature type incl. sketches); empty for delete, with result_geometry {deleted, dependents_kept?, warning?}"
+ },
+ "activate_document": {
+  "description": "Switches the active SolidWorks document to an already-open one by title. Lifecycle op — does NOT check or increment state_version and does NOT change geometry. Lets a caller read/compare another open document (e.g. activate the original, analyze it, activate the copy).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "title": "string (required — the title of an already-OPEN document, e.g. 'gear' or 'gear.SLDPRT')"
+   }
+  },
+  "output": "→ see execution-response.json — CadState.ActiveDocument holds the now-active document title"
+ },
+ "compare_parts": {
+  "description": "ADAPTER-ONLY orchestration (no ToolController/SolidWorksService case) — the objective two-part diff / round-trip verifier (ADR-040, A0). Each doc argument is either an absolute .SLDPRT path (opened from disk) or an open document's TITLE (e.g. an unsaved rebuild). Activates each in turn and runs analyze_model(geometry + mass_properties); compares topology (bodies/faces/edges/vertices), volume, surface area, CG. Reports the DECIDED verified-criteria verdict (topology EXACT and |dV| <= 1% and |dA| <= 1%) — writing ir.verification into an artifact stays the caller's job. Geometry-read-only; doc_b is left active. bbox comparison pending (analyze does not expose it).",
+  "input": {
+   "operation_id": "n/a at this level — each underlying read carries its own operation_id (uuid4) on /api/tool/execute",
+   "state_version": "n/a at this level — the underlying calls thread the adapter's tracked state_version (one-shot resync-retry on INVALID_STATE_VERSION)",
+   "params": {
+    "doc_a": "string (required — REFERENCE document: absolute .SLDPRT path or open-doc title; deltas are relative to it — normally the ORIGINAL)",
+    "doc_b": "string (required — comparison document: absolute .SLDPRT path or open-doc title — normally the REBUILD)",
+    "detail": "string (optional — 'faces' also lists EXTRA (in doc_b only) / MISSING (in doc_a only) surfaces, matched by supporting plane or cylinder axis+radius; blank = summary only)"
+   }
+  },
+  "output": "One-line report: verified_criteria PASS/FAIL | topology A/B (EXACT|DIFFER) | volume A/B + dV% | area A/B + dA% | cg_distance. With detail='faces', a trailing faces: matched/MISSING/EXTRA breakdown."
+ },
+ "open_new_assembly": {
+  "description": "Opens a new blank ASSEMBLY document (the twin of open_new_part). Template: explicit template_path, else the user-configured default assembly template, else the first *.asmdot found. Bumps state_version.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "template_path": "string (optional - full path to an .asmdot template)"
+   }
+  },
+  "output": "-> see execution-response.json - CadState.ActiveDocument = new doc title; DocumentType = ASSEMBLY"
+ },
+ "analyze_assembly": {
+  "description": "READ-ONLY assembly analysis (B1, ADR-047) - does NOT change state. analysis_type='components': top-level component occurrences in FEATURE-TREE order (GetComponents is arbitrary - proven live), each with name (instance-numbered Name2), source path, config, fixed/suppressed, children count (subassembly = out-of-scope hit), and the FULL Transform2 (13 numbers: 3x3 rotation row-major + translation + scale, 9dp - the verification ground truth). 'mates': the MateGroup's subfeatures in CREATION order - type/alignment from the ENUMS (never localized display names), SI value for distance/angle from the mate's own dimension, and per entity: owning component, kind (swMateEntity2ReferenceType_e name), EntityParams (ASSEMBLY-space location+direction+radii). 'faces'/'edges' (requires 'component'): that component's entity list with stable indices for add_mate's INDEX-first selection - coordinates are COMPONENT-LOCAL (proven live; the payload carries the component transform for mapping).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "analysis_type": "string (required): 'components' | 'components_flat' (leaf occurrences across nesting levels, root-space transforms — wrapper flattening) | 'mates' | 'faces' | 'edges'",
+    "component": "string (required for faces/edges - the component's Name2, e.g. 'Shaft-1')"
+   }
+  },
+  "output": "-> see execution-response.json - CadState.Features[0] = one consolidated JSON string"
+ },
+ "insert_component": {
+  "description": "Insert a component occurrence into the ACTIVE assembly (AddComponent5). Preloads the part document silently, re-activates the assembly (deterministically - CloseDoc leaves the active doc unpredictable, proven live), inserts at x/y/z, optionally applies a FULL 13-number transform (transform_json - needed for arbitrary rotations), and makes the fixed state explicit either way. Response Features[0] = the PLAIN instance-numbered component Name2; also fixed=... and transform=[...] readbacks. Bumps state_version.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "file_path": "string (required - the part file to insert; must exist)",
+    "x": "number (optional, default 0 - insertion point, meters)",
+    "y": "number (optional, default 0)",
+    "z": "number (optional, default 0)",
+    "config": "string (optional - referenced configuration name)",
+    "fixed": "boolean (optional - when present the occurrence is explicitly fixed/unfixed)",
+    "transform": "array (optional - 13 numbers: 3x3 rotation row-major + translation xyz (meters) + scale; applied via IMathUtility.CreateTransform after insert)"
+   }
+  },
+  "output": "-> see execution-response.json - Features = [Name2, 'fixed=...', 'transform=[...]']"
+ },
+ "add_mate": {
+  "description": "Add a mate between two entities in the ACTIVE assembly (AddMate5). Entity selection is INDEX-FIRST (KNOWN-LIMITATIONS #6): each side = (component Name2, kind face|edge, index from analyze_assembly(faces|edges, component)); the entity object is selected directly (IEntity.Select4, mark 1) - no coordinate/name picks. value: METERS for distance, DEGREES for angle (C4 tool boundary). After the mate: EditRebuild3 + response carries the mate feature name and BOTH sides' component transforms (the per-mate stop check). ErrorStatus 1 = success (swAddMateError_e, observed live). Bumps state_version.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "mate_type": "string (required): 'coincident' | 'concentric' | 'perpendicular' | 'parallel' | 'tangent' | 'distance' | 'angle' | 'lock'",
+    "alignment": "string (optional, default 'closest'): 'aligned' | 'anti_aligned' | 'closest'",
+    "flip": "boolean (optional, default false)",
+    "value": "number (optional - METERS for distance, DEGREES for angle)",
+    "a_component": "string (required - side A component Name2)",
+    "a_kind": "string (optional, default 'face'): 'face' | 'edge'",
+    "a_index": "integer (required - side A entity index)",
+    "b_component": "string (required - side B component Name2)",
+    "b_kind": "string (optional, default 'face'): 'face' | 'edge'",
+    "b_index": "integer (required - side B entity index)"
+   }
+  },
+  "output": "-> see execution-response.json - Features = ['mate=<name>', 'type=...', 'a_transform=[...]', 'b_transform=[...]']"
+ },
+ "compare_assemblies": {
+  "description": "ADAPTER-ONLY orchestration (no COM case; composes analyze_assembly + analyze_model reads) - the assembly round-trip verifier behind the artifact verified label (ADR-047 B4, criteria RATIFIED): component set EXACT (source basename + config + instance counts, paired by tree-order ordinal) AND every paired component transform within tolerance (position <= 1um, rotation <= 1e-6) AND mate count + type multiset match AND assembly mass properties within the V1 thresholds (|dV| <= 1%, |dA| <= 1%). doc args = absolute .SLDASM path OR open-document title (unsaved rebuilds compare too). The verdict is a REPORT - writing ir.verification stays the caller's job.",
+  "input": {
+   "operation_id": "n/a at this level - each underlying read carries its own",
+   "state_version": "n/a at this level - reads are non-bumping; open/activate bumps flow through _call_raw",
+   "params": {
+    "doc_a": "string (required - the REFERENCE assembly: path or open title; normally the original)",
+    "doc_b": "string (required - the candidate assembly: path or open title; normally the rebuild)"
+   }
+  },
+  "output": "one line: verified_criteria=PASS/FAIL | components/set | transforms max deltas | mates | dV/dA"
+ },
+ "save_body_as_part": {
+  "description": "Extract ONE solid body of the ACTIVE (multibody) part into its own .SLDPRT (CreateFeatureFromBody3 on a fresh part from the default template; geometry stays in the SOURCE coordinates; the new doc is saved and closed, the source re-activated). The missing-parts half of flattened-assembly reconstruction (ADR-048): a structured assembly STEP with no per-part files flattens to a multibody import - each DISTINCT body becomes a referenced part file; instances then get transforms via fingerprint match + recovery.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "body_index": "integer (required - index from analyze_model(bodies))",
+    "file_path": "string (required - target .sldprt path; directory is created)"
+   }
+  },
+  "output": "-> see execution-response.json - Features = [file name, 'body_name=<source body name>' when available]"
+ },
+ "list_components": {
+  "description": "[mm/deg/kg] Fast component list of the ACTIVE assembly (hundreds in <1 s): name, file, config, state (resolved / lightweight / suppressed — a lightweight component is loaded and shown, NOT suppressed), hidden, fixed, origin_mm. under = only the components inside that subassembly; name_filter = substring; fields = just these (e.g. [\"state\"]; name always); pages of `limit` (next_offset when there is more). Lighter than analyze_assembly.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "top_only": "boolean (optional, default false)",
+    "name_filter": "string (optional, default \"\")",
+    "under": "string (optional, default \"\")",
+    "fields": "array (optional, default [])",
+    "offset": "integer (optional, default 0)",
+    "limit": "integer (optional, default 50)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "list_open_documents": {
+  "description": "[mm/deg/kg] Documents open in the (own) SolidWorks. Default shows only visible/modified ones; full=True lists background-loaded component docs too.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "full": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "interference_check": {
+  "description": "[mm/deg/kg] Interference detection on the ACTIVE assembly (whole assembly, or only `components`). Zones are merged into component PAIRS with total volume_mm3, zone count, box_mm of the first zone and severity (negligible <1 mm³, minor <100, major). Sorted by volume. min_volume_mm3 drops touching faces; exclude_internal=True drops pairs inside one subassembly (its fasteners); group=True merges pairs that differ only by instance numbers (\"count\": 4). baseline='save' remembers every pair of this assembly as intended (a stud in its handle, a screw in its thread); baseline='compare' then shows only NEW or changed pairs (known = how many were hidden).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "components": "array (optional, default [])",
+    "include_hidden": "boolean (optional, default false)",
+    "coincidence_as_interference": "boolean (optional, default false)",
+    "subassemblies_as_components": "boolean (optional, default false)",
+    "include_multibody": "boolean (optional, default false)",
+    "min_volume_mm3": "number (optional, default 0.0)",
+    "max_items": "integer (optional, default 25)",
+    "exclude_internal": "boolean (optional, default false)",
+    "group": "boolean (optional, default true)",
+    "baseline": "string: '' | 'save' | 'compare' (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "clearance_check": {
+  "description": "[mm/deg/kg] Pairs of parts closer than min_gap_mm but NOT intersecting (bounding-box prefilter → exact measure). Scope: `components`, or all leaf parts under `subassembly` (e.g. 'Frame-1'), or the whole assembly (slow on big ones). exclude_internal / group as in interference_check.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "min_gap_mm": "number (optional, default 5.0)",
+    "components": "array (optional, default [])",
+    "subassembly": "string (optional, default \"\")",
+    "max_pairs": "integer (optional, default 300)",
+    "include_touching": "boolean (optional, default false)",
+    "exclude_internal": "boolean (optional, default false)",
+    "group": "boolean (optional, default true)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "measure_components": {
+  "description": "[mm/deg/kg] Minimum distance (mm) between two components of the ACTIVE assembly, plus center/normal distance, angle and bounding-box gaps per axis. distance 0 + contact = touching/intersecting. Subassemblies are measured through their parts (closest = the two parts that are nearest).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "component_a": "string (required)",
+    "component_b": "string (required)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "mass_properties": {
+  "description": "[mm/deg/kg] Mass (kg), centre of gravity (mm, ASSEMBLY frame), volume (mm³), area (mm²) of the active part or assembly. No components = whole document; with components = per component + combined total.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "components": "array (optional, default [])"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "list_references": {
+  "description": "[mm/deg/kg] All files referenced by an assembly/drawing (default: the active doc) AS SAVED on disk (save first to see unsaved changes), with missing files and over-long paths flagged; a missing file's same-named candidates under the assembly's folder are listed (candidates) — re-point with replace_component(assembly_path, old_file, new_file) on the closed assembly. SolidWorks opens an assembly whose file is missing with that component suppressed, so a \"suppressed\" part may just be a broken link.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "file_path": "string (optional, default \"\")",
+    "long_path_warn": "integer (optional, default 200)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "get_custom_properties": {
+  "description": "[mm/deg/kg] Custom properties (file-level and configuration-specific, resolved values) of the active doc or of an assembly component (its referenced configuration by default).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "component": "string (optional, default \"\")",
+    "config": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "bom_export": {
+  "description": "[mm/deg/kg] Flat BOM of the ACTIVE assembly: one row per file+configuration with quantity, type and custom properties (default: Обозначение, Наименование, Материал, Масса, Раздел; material falls back to the part material). Suppressed / excluded-from-BOM skipped. csv_path → also writes ';'-CSV (UTF-8 BOM).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "csv_path": "string (optional, default \"\")",
+    "properties": "array (optional, default [])",
+    "top_level_only": "boolean (optional, default false)",
+    "max_rows": "integer (optional, default 200)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "set_component_state": {
+  "description": "[mm/deg/kg] Hide/show, suppress/resolve, fix/float components of the ACTIVE assembly (only the flags given).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "components": "array (required)",
+    "hidden": "boolean/null (optional, default null)",
+    "suppressed": "boolean/null (optional, default null)",
+    "fixed": "boolean/null (optional, default null)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "set_appearance": {
+  "description": "[mm/deg/kg] Color (rgb 0..255) and transparency (0..1) of assembly components (this configuration), or of the whole active part when components is empty.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "rgb": "array (required)",
+    "transparency": "number (optional, default 0.0)",
+    "components": "array (optional, default [])"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "move_component": {
+  "description": "[mm/deg/kg] Move a component: translate by d*_mm (absolute=True → set origin to d*_mm); rotate about its own axes through its origin by r*_deg, or about ANY axis = [x,y,z] (assembly space) by angle_deg through pivot_mm (default: the component's origin) — e.g. swing a door about its hinge line. transform = its full placement, 13 numbers as insert_component / analyze_assembly give them (rotation rows = its axes, translation mm, scale); placements = [{component, transform}, …] places many at once with one rebuild — a mechanism's pose, an animation frame. Mates may pull components back on rebuild; fixed components move too.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "component": "string (optional, default \"\")",
+    "dx_mm": "number (optional, default 0.0)",
+    "dy_mm": "number (optional, default 0.0)",
+    "dz_mm": "number (optional, default 0.0)",
+    "rx_deg": "number (optional, default 0.0)",
+    "ry_deg": "number (optional, default 0.0)",
+    "rz_deg": "number (optional, default 0.0)",
+    "axis": "array (optional, default [])",
+    "angle_deg": "number (optional, default 0.0)",
+    "pivot_mm": "array (optional, default [])",
+    "absolute": "boolean (optional, default false)",
+    "transform": "array (optional, default [])",
+    "placements": "array (optional, default [])"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "replace_component": {
+  "description": "[mm/deg/kg] Replace a component file. Open assembly: component (+all_instances, config) → ReplaceComponents2 with mates re-attached. CLOSED assembly: assembly_path + old_file → re-point the reference on disk.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "new_file": "string (required)",
+    "component": "string (optional, default \"\")",
+    "all_instances": "boolean (optional, default true)",
+    "config": "string (optional, default \"\")",
+    "assembly_path": "string (optional, default \"\")",
+    "old_file": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "pack_and_go": {
+  "description": "[mm/deg/kg] Copy an assembly (default: active) with all referenced files (+ same-name drawings) into target_dir and re-point references in the copies. rename_map {old name|stem: new name}, or prefix/suffix for all. CLOSES all documents first (refuses if any are unsaved unless discard_unsaved).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "target_dir": "string (required)",
+    "assembly_path": "string (optional, default \"\")",
+    "rename_map": "object (optional, default {})",
+    "prefix": "string (optional, default \"\")",
+    "suffix": "string (optional, default \"\")",
+    "flatten": "boolean (optional, default true)",
+    "include_drawings": "boolean (optional, default false)",
+    "discard_unsaved": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "set_custom_properties": {
+  "description": "[mm/deg/kg] Set custom properties (value null = delete) on the active doc or an assembly component's file. config_specific=True writes to the configuration tab instead of the file tab.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "properties": "object (required)",
+    "component": "string (optional, default \"\")",
+    "config": "string (optional, default \"\")",
+    "config_specific": "boolean (optional, default false)",
+    "save": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "configurations": {
+  "description": "[mm/deg/kg] List / activate / add / delete configurations of the active doc (or a component's file). Note: 'add' makes the new configuration active.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "action": "string: 'list' | 'activate' | 'add' | 'delete' (optional, default \"list\")",
+    "name": "string (optional, default \"\")",
+    "description": "string (optional, default \"\")",
+    "component": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "export_components": {
+  "description": "[mm/deg/kg] Export ONLY the listed components of the active assembly (assembly coordinates) to STEP/IGES/ Parasolid/STL by file_path extension; the others are hidden during the save.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "components": "array (required)",
+    "file_path": "string (required)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sheet_metal_info": {
+  "description": "[mm/deg/kg] Sheet-metal data: thickness_mm, bend_radius_mm, K-factor / bend table, bends, material and SW's cut-list properties (flat bounding box, cutting length…). Active part; one assembly component; or — for an assembly — EVERY sheet-metal part (deduped by file+config, with qty) and a by_thickness summary. details=True includes cut-list properties per part.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "component": "string (optional, default \"\")",
+    "details": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "export_flat_dxf": {
+  "description": "[mm/deg/kg] Flat-pattern DXF straight from the model (no drawing). Active sheet-metal part → file_path (default next to the part); one assembly component; or the WHOLE active assembly → one DXF per unique part+configuration in out_dir (default <assembly folder>\\DXF) named <name>[_<config>]_<t>mm_x<qty>.dxf, <name> = file name, or «Обозначение» (name_by=designation) / «Обозначение Наименование». layers=True sorts the geometry onto layers for laser CAM: CUT_OUTER (white), CUT_INNER (red), BEND (green, dashed), MARK (blue — open sketch chains); skipped with hidden_edges / bounding_box. note=True writes «designation | t | qty | material» under the part on layer NOTE (not a cut layer). Every file entry carries designation, thickness, bend radius, K, material, qty.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "file_path": "string (optional, default \"\")",
+    "out_dir": "string (optional, default \"\")",
+    "component": "string (optional, default \"\")",
+    "name_by": "string: 'file' | 'designation' | 'designation_name' (optional, default \"file\")",
+    "layers": "boolean (optional, default true)",
+    "note": "boolean (optional, default false)",
+    "bend_lines": "boolean (optional, default true)",
+    "sketches": "boolean (optional, default false)",
+    "hidden_edges": "boolean (optional, default false)",
+    "bounding_box": "boolean (optional, default false)",
+    "merge_coplanar_faces": "boolean (optional, default true)",
+    "library_features": "boolean (optional, default false)",
+    "forming_tools": "boolean (optional, default false)",
+    "name_with_thickness_qty": "boolean (optional, default true)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "view_image": {
+  "description": "[mm/deg/kg] SEE the model: PNG of the active document returned as an image. view: front/back/left/right/top/ bottom/iso/trimetric/dimetric or '*<named view>'; ANY direction: view_dir = [x,y,z] from the model toward you ([1,1,1] = iso, [-1,1,-1] = iso from behind-left, [0,-1,0] = from below), up = the screen's up (default +Y). CLOSE-UP of a unit: focus = components to zoom to (isolate=True hides everything else), or focus_box_mm = [x1,y1,z1,x2,y2,z2] in model / assembly space — far better than a bigger picture of the whole machine (a unit covered by others from that side: isolate=True, or a section). size = the LONG side in px (≤2000; image tokens grow with the area); long narrow parts get it too. display shaded_edges (default; edges keep light parts visible), shaded, hlr, hlv, wireframe. Optional section through a plane (+offset), hidden components. The answer's view_axes say which model axis points right / up / toward you; triad draws them in a corner. render=True: a presentation picture — perspective, shadows, ambient occlusion, full-scene anti-aliasing, no edge lines (slower; for showing a design, not for checking it). Auto-cropped; saved to file_path or a temp file.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "view": "string (optional, default \"iso\")",
+    "view_dir": "array (optional, default [])",
+    "up": "array (optional, default [])",
+    "display": "string: 'shaded_edges' | 'shaded' | 'hlr' | 'hlv' | 'wireframe' (optional, default \"shaded_edges\")",
+    "size": "integer (optional, default 640)",
+    "focus": "array (optional, default [])",
+    "focus_box_mm": "array (optional, default [])",
+    "isolate": "boolean (optional, default false)",
+    "hide_components": "array (optional, default [])",
+    "section_plane": "string (optional, default \"\")",
+    "section_offset_mm": "number (optional, default 0.0)",
+    "section_reverse": "boolean (optional, default false)",
+    "crop": "boolean (optional, default true)",
+    "triad": "boolean (optional, default true)",
+    "render": "boolean (optional, default false)",
+    "file_path": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_status": {
+  "description": "[mm/deg/kg] SOLIDWORKS Simulation: add-in version and the active document's studies (type, mesh elements, loads+fixtures count, has_results, active). study / details=True add that study's setup: materials per body/shell, fixtures / loads / connectors, global contact and contact sets, mesh and mesh controls — check it before sim_run.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "study": "string (optional, default \"\")",
+    "details": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_create_study": {
+  "description": "[mm/deg/kg] Create a Simulation study on the active part/assembly and make it active (sheet metal is meshed as shells automatically). Workflow: create → sim_set_material (if parts lack a material) → sim_add_fixture → sim_add_load → [sim_contact] → sim_mesh → sim_run → sim_results.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "name": "string (optional, default \"Static 1\")",
+    "study_type": "string: 'static' | 'frequency' | 'buckling' (optional, default \"static\")",
+    "replace": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_delete_study": {
+  "description": "[mm/deg/kg] Delete a Simulation study by name.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "study": "string (required)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_set_material": {
+  "description": "[mm/deg/kg] Assign a library material (e.g. 'AISI 304', 'AISI 1020', 'Plain Carbon Steel', '1060 Alloy') to all solid bodies and shells of the study (or only `components`). Needed when RunAnalysis reports a missing material; parts with a SOLIDWORKS material already have it.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "material": "string (required)",
+    "study": "string (optional, default \"\")",
+    "library": "string (optional, default \"\")",
+    "components": "array (optional, default [])"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_add_fixture": {
+  "description": "[mm/deg/kg] Add a fixture (restraint) on faces of the active/named study. faces: list of {\"face_index\": i} (part, analyze_model(faces) numbering) | {\"component\": \"X-1\", \"face_index\": i} (assembly, analyze_assembly(faces, component)) | {\"point_mm\": [x,y,z]} (a point ON the face, found by geometry — a hidden hole wall too).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "faces": "array (required)",
+    "fixture_type": "string: 'fixed' | 'immovable' | 'roller' | 'hinge' (optional, default \"fixed\")",
+    "study": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_add_load": {
+  "description": "[mm/deg/kg] Add a load. force: value N total over the faces, direction [x,y,z] GLOBAL (empty = normal to the face). pressure: value MPa normal to the faces (reverse flips). gravity: value m/s² (default 9.81), direction default [0,-1,0], no faces. SHEET METAL (shells): load the large sheet faces — loads on the thin thickness/side faces are not carried to the shell mid-surface (observed: zero result). faces: list of {\"face_index\": i} (part, analyze_model(faces) numbering) | {\"component\": \"X-1\", \"face_index\": i} (assembly, analyze_assembly(faces, component)) | {\"point_mm\": [x,y,z]} (a point ON the face, found by geometry — a hidden hole wall too).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "load_type": "string: 'force' | 'pressure' | 'gravity' (optional, default \"force\")",
+    "value": "number (optional, default 0.0)",
+    "faces": "array (optional, default [])",
+    "direction": "array (optional, default [])",
+    "reverse": "boolean (optional, default false)",
+    "study": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_contact": {
+  "description": "[mm/deg/kg] Global contact between touching assembly components (bonded = welded/glued, SW default; no_penetration = parts may separate/slide).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "global_contact": "string: 'bonded' | 'no_penetration' | 'free' (optional, default \"bonded\")",
+    "study": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_mesh": {
+  "description": "[mm/deg/kg] Mesh the study. element_size_mm 0 = SolidWorks default size. Returns elements/nodes/time.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "element_size_mm": "number (optional, default 0.0)",
+    "quality": "string: 'high' | 'draft' (optional, default \"high\")",
+    "mesher": "string: '' | 'standard' | 'curvature' | 'blended' (optional, default \"\")",
+    "tolerance_mm": "number (optional, default 0.0)",
+    "study": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_run": {
+  "description": "[mm/deg/kg] Solve the study (blocks until done; mesh first) and return the results summary like sim_results.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "study": "string (optional, default \"\")",
+    "yield_mpa": "number (optional, default 0.0)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_results": {
+  "description": "[mm/deg/kg] Results of a solved study. Static: von Mises min/max MPa and displacement min/max mm, each with the node and max_at_mm location, factor of safety (automatic; for sheet-metal shells = lowest yield of the study materials / max σ; yield_mpa overrides), connector forces and edge-weld pass/fail. When the von Mises max sits on a fixture or a loaded face: von_mises_mpa.max_on names it and max_away_from_boundary is the highest stress farther than two elements from every fixture and load — judge the part by that, not by the max (peak_note says why). Frequency: resonant frequencies (Hz). Buckling: load factors.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "study": "string (optional, default \"\")",
+    "yield_mpa": "number (optional, default 0.0)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_plot": {
+  "description": "[mm/deg/kg] Create and activate a result plot in the study (for viewing in SolidWorks) and return its min/max. To SEE the result use sim_image.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "result": "string: 'stress' | 'displacement' | 'fos' (optional, default \"stress\")",
+    "deformed": "boolean (optional, default true)",
+    "deform_scale": "number (optional, default 0.0)",
+    "study": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "dimension_for_face": {
+  "description": "[mm/deg/kg] Find the driving dimension behind ONE face of the active part — the step between a face that is off (face_index) and modify_dimension. Walks feature_map to the feature that CREATED the face, takes that feature's profile sketch, finds the sketch segment the face was swept from (a cylinder -> the circle/arc with the same radius on its axis; a side wall -> the line lying in its plane; a cap parallel to the sketch -> the extrude's depth), and returns the dimension SolidWorks reports as ATTACHED to that segment. face_index: from analyze_model(faces) (or compare_parts' face diff). add_if_missing: when the segment has no driving dimension, add one at the segment's CURRENT size (geometry unchanged) and return its name (status 'added'). Returns JSON: status ('dimensioned' | 'undimensioned' | 'added' | 'not_dimension_driven' | 'multiple_dimensions' | 'ambiguous_feature' | 'ambiguous_segment' | 'unattributed' | 'no_segment' | 'no_profile_sketch' | 'unsupported'), feature, sketch, segment (sketch frame), dimension {name (pass to modify_dimension), value_mm | value_deg, type}, position_dimensions for a circle (lengths in mm). Anything that does not resolve to exactly one candidate is reported, never guessed. Read-only unless add_if_missing adds a dimension. feature_map rebuilds the tree step by step, so this takes a few seconds on large parts.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "face_index": "integer (required)",
+    "add_if_missing": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "list_mates": {
+  "description": "[mm/deg/kg] Mates of the ACTIVE assembly (incl. mate folders): name, type, alignment, value_mm / value_deg, components, suppressed, and error (over-defined / unsatisfied). Filter by component substring or errors_only. Lighter than analyze_assembly(mates).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "component": "string (optional, default \"\")",
+    "errors_only": "boolean (optional, default false)",
+    "max_items": "integer (optional, default 200)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "edit_mate": {
+  "description": "[mm/deg/kg] Edit an existing mate by name: value_mm (distance) / value_deg (angle), flip alignment, suppress / unsuppress, rename, re-point it at other geometry (entities: new entity specs, same count/kinds), or delete. Returns the mate's new state incl. any error. Entity spec: {\"component\",\"face_index\"} | {\"component\",\"edge_index\"} (indices from analyze_assembly(faces|edges, component)) | {\"plane\": \"Top Plane\"} (assembly plane, any language) | {\"component\",\"plane\"} | {\"component\"}.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "mate": "string (required)",
+    "value_mm": "number/null (optional, default null)",
+    "value_deg": "number/null (optional, default null)",
+    "flip": "boolean (optional, default false)",
+    "suppressed": "boolean/null (optional, default null)",
+    "new_name": "string (optional, default \"\")",
+    "entities": "array (optional, default [])",
+    "delete": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "constraint_status": {
+  "description": "[mm/deg/kg] Per component of the ACTIVE assembly: fixed / fully_defined / under_defined / over_defined and its mate count, plus a summary and the number of mates with errors. problems_only hides fixed/fully.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "top_only": "boolean (optional, default true)",
+    "problems_only": "boolean (optional, default false)",
+    "max_items": "integer (optional, default 300)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sheet_metal_cutlist": {
+  "description": "[mm/deg/kg] Cutting / bending sheet for production. Active part or WHOLE assembly (unique part+config, qty × assembly_qty): Обозначение, Наименование, material, thickness, flat blank L×W mm, net area m², cut length mm, cut-outs, bends, bend radius, K, mass kg; totals per thickness+material (area, cut length, bends, mass). csv_path → ';'-CSV (Excel, RU decimals). xlsx_path → formatted Excel workbook: groups by thickness+material, positions sorted by «Обозначение» (same designation + blank merged, qty summed), totals as formulas, sheet «Итоги».",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "csv_path": "string (optional, default \"\")",
+    "xlsx_path": "string (optional, default \"\")",
+    "assembly_qty": "integer (optional, default 1)",
+    "qty": "integer (optional, default 1)",
+    "max_rows": "integer (optional, default 100)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sheet_metal_hem": {
+  "description": "[mm/deg/kg] Hem (подгибка) on edges of the ACTIVE sheet-metal part. edge_indices from analyze_model(edges) — the outer edges of the sheet face. closed/open use length+gap, tear_drop angle+radius, rolled angle+radius.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "edge_indices": "array (required)",
+    "hem_type": "string: 'closed' | 'open' | 'tear_drop' | 'rolled' | 'double' (optional, default \"closed\")",
+    "position": "string: 'inside' | 'outside' (optional, default \"inside\")",
+    "length_mm": "number (optional, default 10.0)",
+    "gap_mm": "number (optional, default 0.5)",
+    "angle_deg": "number (optional, default 270.0)",
+    "radius_mm": "number (optional, default 1.0)",
+    "reverse": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sheet_metal_miter_flange": {
+  "description": "[mm/deg/kg] Miter flange (кромка под углом) along a chain of edges (corners mitred automatically). Profile = `sketch` or the ACTIVE sketch: an open line/arc chain starting AT the end point of the first edge, on a plane normal to that edge (e.g. Right Plane for an edge along X ending at x=0). edge_indices from analyze_model(edges). radius_mm 0 = sheet default. Verified: L-profile along 2 edges -> 4 bends.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "edge_indices": "array (required)",
+    "sketch": "string (optional, default \"\")",
+    "position": "string: 'material_inside' | 'material_outside' | 'bend_outside' (optional, default \"material_inside\")",
+    "radius_mm": "number (optional, default 0.0)",
+    "gap_mm": "number (optional, default 0.25)",
+    "start_offset_mm": "number (optional, default 0.0)",
+    "end_offset_mm": "number (optional, default 0.0)",
+    "trim_side_bends": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sheet_metal_cross_break": {
+  "description": "[mm/deg/kg] Cross break (поперечный перегиб, stiffening X) on faces of the ACTIVE sheet-metal part. Tip: corner fillet/chamfer of a sheet = add_edge_feature on the thickness edges.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "face_indices": "array (required)",
+    "angle_deg": "number (optional, default 2.0)",
+    "radius_mm": "number (optional, default 1.0)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "convert_to_sheet_metal": {
+  "description": "[mm/deg/kg] Convert a SOLID (e.g. a box modelled as a block) into sheet metal: fixed face + bend edges (corner rips are made automatically), thickness and bend radius. Indices from analyze_model(faces/edges). Example: box → open tray = fixed bottom face, bend edges = the 4 bottom edges. auto=True for a FLAT plate without bends: the largest planar face is fixed and the thickness is measured (its distance to the facing face); the side is checked by volume. Missing thickness_mm is measured the same way.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "fixed_face_index": "integer (optional, default -1)",
+    "bend_edge_indices": "array (optional, default [])",
+    "thickness_mm": "number (optional, default 0.0)",
+    "bend_radius_mm": "number (optional, default 2.0)",
+    "gap_mm": "number (optional, default 0.2)",
+    "reverse_thickness": "boolean (optional, default false)",
+    "keep_body": "boolean (optional, default false)",
+    "auto": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_image": {
+  "description": "[mm/deg/kg] SEE a solved study: colour map (blue→red) of von Mises stress (MPa) or displacement (mm) drawn from the solver's node data (solids and sheet-metal shells), with legend and the max marked. deform_scale: 0 = undeformed, -1 = auto, N = ×N. clip_percentile <100 (e.g. 99) caps the colour scale so a singular peak (fixture corner, point load) does not wash out the map; values above are red.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "result": "string: 'stress' | 'displacement' (optional, default \"stress\")",
+    "view": "string: 'iso' | 'front' | 'back' | 'top' | 'bottom' | 'right' | 'left' (optional, default \"iso\")",
+    "deform_scale": "number (optional, default 0.0)",
+    "clip_percentile": "number (optional, default 100.0)",
+    "width": "integer (optional, default 640)",
+    "study": "string (optional, default \"\")",
+    "file_path": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "add_plane_angle": {
+  "description": "[mm/deg/kg] Reference plane through an axis (by name) or an edge (analyze_model(edges) index) at angle_deg to base_plane (e.g. 'Front Plane'). The axis/edge must lie in or parallel to the base plane.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "base_plane": "string (required)",
+    "angle_deg": "number (required)",
+    "axis": "string (optional, default \"\")",
+    "edge_index": "integer (optional, default -1)",
+    "name": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "add_axis_two_points": {
+  "description": "[mm/deg/kg] Reference axis through two model points [x,y,z] mm (made from a 3D-sketch line).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "p1_mm": "array (required)",
+    "p2_mm": "array (required)",
+    "name": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sweep_pipe": {
+  "description": "[mm/deg/kg] Pipe / hose / cable / rod along a 3D polyline (points [[x,y,z],…] mm) with a circular profile. wall_mm > 0 = tube; bend_radius_mm > 0 rounds the polyline corners (pipe bends).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "points_mm": "array (required)",
+    "diameter_mm": "number (required)",
+    "wall_mm": "number (optional, default 0.0)",
+    "bend_radius_mm": "number (optional, default 0.0)",
+    "merge": "boolean (optional, default true)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "loft": {
+  "description": "[mm/deg/kg] Lofted boss through ≥2 closed profile sketches (names, in order, on different planes).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "profile_sketches": "array (required)",
+    "closed": "boolean (optional, default false)",
+    "merge": "boolean (optional, default true)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "set_body_visibility": {
+  "description": "[mm/deg/kg] Hide/show bodies of the active (multibody) part by name; empty list = all. Returns all body names.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "bodies": "array (optional, default [])",
+    "hidden": "boolean (optional, default true)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "batch_export_files": {
+  "description": "[mm/deg/kg] Export many FILES (parts/assemblies/drawings by path) to a format (step, iges, stl, x_t, pdf, dxf…): each is opened read-only, saved as <out_dir or its folder>\\<name>.<format>, closed. Errors per file.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "files": "array (required)",
+    "format": "string (optional, default \"step\")",
+    "out_dir": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "run_macro": {
+  "description": "[mm/deg/kg] Run a SolidWorks VBA macro (.swp / .swb) from the project's macros folder ONLY (SWMCP_MACROS_DIR, default <repo>\\macros). module default '<file name>1'. args = {\"name\": value, …} → written to Environ(\"TEMP\") & \"\\SolidWorksMCP\\macro_args.txt\" as \"name=value\" lines (CRLF, system code page — read them with Line Input and Split(line, \"=\")). A VBA error box is closed by the server and its text comes back in the error (MACRO_FAILED) or in dialogs_closed; VBA_BLOCKED = the VBA engine is stuck (ensure_ready).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "macro": "string (required)",
+    "module": "string (optional, default \"\")",
+    "procedure": "string (optional, default \"main\")",
+    "args": "object (optional, default {})"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "job_result": {
+  "description": "[mm/deg/kg] Result of a long operation that answered {\"running\": true, \"job_id\": …}. Waits up to wait_s (≤45) seconds; returns the result (with job_seconds), or the running answer again (then call job_result again).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "job_id": "string (required)",
+    "wait_s": "number (optional, default 40.0)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "execute_batch": {
+  "description": "[mm/deg/kg] Run up to 100 tool calls in ONE request, in order: steps = [{\"tool\": \"<name>\", \"args\": {...}}, …] with exactly the arguments of the single tools — or steps_file = a JSON file on disk with that list (a long batch then never passes through the conversation). Reuse earlier results in string args: \"$last.<path>\" or \"$<n>.<path>\" (n = 0-based step) — a path into the step's answer, e.g. \"$last.created.0\" (the feature it made), \"$1.study\", \"$0.components.0.name\". report: full = {ok, steps, results: [{step, tool, …its answer | error}]}; summary = {ok, steps, failed: [{step, tool, error}], created, removed, saved, last}; auto = summary for a steps_file or more than 20 steps. Pictures of view_image / view_images steps come with the answer (up to 8). A tool of a group that is off runs here too: its group is turned on (`groups_turned_on`). Stops at the first error unless stop_on_error=False. If SolidWorks dies mid-batch it is restarted and the batch stops: `solidworks_restarted` says so — unsaved changes of the open documents are lost, `saved` lists what reached the disk.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "steps": "array (optional, default [])",
+    "steps_file": "string (optional, default \"\")",
+    "stop_on_error": "boolean (optional, default true)",
+    "report": "string: 'auto' | 'full' | 'summary' (optional, default \"auto\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "add_mate_advanced": {
+  "description": "[mm/deg/kg] Advanced / mechanical mates in the ACTIVE assembly: symmetric (entities ×2 + symmetry_plane) · width (width_entities ×2 + tab_entities ×2, constraint centered/ free/distance/percent) · profile_center (entities ×2 rectangular/circular faces, value_mm offset, lock_rotation) · hinge (concentric_entities ×2 + coincident_entities ×2) · gear (entities ×2 cylinders, ratio) · linear_coupler (entity1/entity2 + reference_component1/2, ratio) · lock (components ×2) · slot (entities). Entity spec: {\"component\",\"face_index\"} | {\"component\",\"edge_index\"} (indices from analyze_assembly(faces|edges, component)) | {\"plane\": \"Top Plane\"} (assembly plane, any language) | {\"component\",\"plane\"} | {\"component\"}.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "mate_type": "string: 'symmetric' | 'width' | 'profile_center' | 'hinge' | 'gear' | 'linear_coupler' | 'lock' | 'slot' (required)",
+    "entities": "array (optional, default [])",
+    "symmetry_plane": "object/null (optional, default null)",
+    "width_entities": "array (optional, default [])",
+    "tab_entities": "array (optional, default [])",
+    "concentric_entities": "array (optional, default [])",
+    "coincident_entities": "array (optional, default [])",
+    "entity1": "object/null (optional, default null)",
+    "entity2": "object/null (optional, default null)",
+    "reference_component1": "string (optional, default \"\")",
+    "reference_component2": "string (optional, default \"\")",
+    "components": "array (optional, default [])",
+    "constraint": "string (optional, default \"\")",
+    "value_mm": "number/null (optional, default null)",
+    "percent": "number/null (optional, default null)",
+    "ratio_numerator": "number (optional, default 1.0)",
+    "ratio_denominator": "number (optional, default 1.0)",
+    "reverse": "boolean (optional, default false)",
+    "lock_rotation": "boolean (optional, default false)",
+    "alignment": "string: 'closest' | 'aligned' | 'anti_aligned' (optional, default \"closest\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "insert_and_mate": {
+  "description": "[mm/deg/kg] Insert a part / sub-assembly into the ACTIVE assembly AND mate it in one call (\"put it there\"). mates: [{\"type\": coincident|concentric|parallel|perpendicular|tangent|distance|angle, \"own\": entity of the NEW component (face_index / edge_index / plane — no component), \"target\": existing entity spec, \"alignment\": closest|aligned|anti_aligned, \"value_mm\" | \"value_deg\"}]. All-or-nothing: if a mate fails the component is removed again. Returns component, origin_mm, mates, constraint status. Entity spec: {\"component\",\"face_index\"} | {\"component\",\"edge_index\"} (indices from analyze_assembly(faces|edges, component)) | {\"plane\": \"Top Plane\"} (assembly plane, any language) | {\"component\",\"plane\"} | {\"component\"}.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "file_path": "string (required)",
+    "mates": "array (required)",
+    "config": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "pattern_components": {
+  "description": "[mm/deg/kg] Pattern components of the ACTIVE assembly (local component pattern). linear: direction = a LINEAR EDGE or axis entity, count, spacing_mm (+ optional direction2/count2/spacing2_mm). circular: axis = axis / cylindrical face / circular edge entity, count, angle_deg (total with equal_spacing, else between instances). Entity spec: {\"component\",\"face_index\"} | {\"component\",\"edge_index\"} (indices from analyze_assembly(faces|edges, component)) | {\"plane\": \"Top Plane\"} (assembly plane, any language) | {\"component\",\"plane\"} | {\"component\"}.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "components": "array (required)",
+    "pattern": "string: 'linear' | 'circular' (optional, default \"linear\")",
+    "count": "integer (optional, default 3)",
+    "direction": "object/null (optional, default null)",
+    "spacing_mm": "number (optional, default 50.0)",
+    "direction2": "object/null (optional, default null)",
+    "count2": "integer (optional, default 2)",
+    "spacing2_mm": "number (optional, default 50.0)",
+    "axis": "object/null (optional, default null)",
+    "angle_deg": "number (optional, default 360.0)",
+    "equal_spacing": "boolean (optional, default true)",
+    "reverse": "boolean (optional, default false)",
+    "reverse2": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sheet_metal_gusset": {
+  "description": "[mm/deg/kg] Sheet-metal gusset (штампованное ребро жёсткости поперёк гиба) on the ACTIVE sheet-metal part. face_indices = the two flat faces on both sides of one bend (analyze_model(faces)). Position: along the bend edge (auto: the straight edge where face 1 meets the bend; or edge_index), offset_mm from its start (default: middle). Size: indent_depth_mm, or length_mm + height_mm (profile dimensions); width_mm = rib width, thickness_mm default = sheet thickness.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "face_indices": "array (required)",
+    "edge_index": "integer (optional, default -1)",
+    "offset_mm": "number/null (optional, default null)",
+    "flip_offset": "boolean (optional, default false)",
+    "indent_depth_mm": "number (optional, default 5.0)",
+    "length_mm": "number/null (optional, default null)",
+    "height_mm": "number (optional, default 10.0)",
+    "width_mm": "number (optional, default 6.0)",
+    "thickness_mm": "number/null (optional, default null)",
+    "gusset_type": "string: 'rounded' | 'flat' (optional, default \"rounded\")",
+    "draft_deg": "number (optional, default 0.0)",
+    "inner_fillet_mm": "number (optional, default 1.0)",
+    "outer_fillet_mm": "number (optional, default 1.0)",
+    "edge_fillet_mm": "number (optional, default 0.0)",
+    "flip_sides": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sheet_metal_dfm": {
+  "description": "[mm/deg/kg] Manufacturability (DFM) check of sheet metal: active part, one assembly component, or EVERY sheet-metal part of the active assembly. Flat patterns are read from the models (~1 s a part; one that cannot be is exported the old way) and analysed (t = thickness, R = bend radius): hole_to_bend — cut-out edge closer to a bend line than 2.5·t+R in the flat (0 = cut-out crosses the bend); hole_to_edge — cut-out closer to the outer contour than t; small_hole — Ø (or slot width) < t; short_flange — outside flange length (90° estimate) < 4·t; mixed_bend_radii — one part bent with several radii; cross_part radius_per_thickness — same thickness+material bent with different radii (extra tooling). Limits 0 = these defaults, any value in mm overrides. Issues carry flat-pattern coordinates `at` (mm); details=True adds every bend's flange lengths. keep_dxf_dir keeps the analysed flat patterns as DXF (for laser files use export_flat_dxf — SolidWorks' own export).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "component": "string (optional, default \"\")",
+    "min_flange_mm": "number (optional, default 0.0)",
+    "hole_to_bend_mm": "number (optional, default 0.0)",
+    "hole_to_edge_mm": "number (optional, default 0.0)",
+    "min_hole_mm": "number (optional, default 0.0)",
+    "details": "boolean (optional, default false)",
+    "keep_dxf_dir": "string (optional, default \"\")",
+    "max_parts": "integer (optional, default 100)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_connector": {
+  "description": "[mm/deg/kg] Connector in the study (assemblies of sheet metal: bolted / welded joints instead of global bonding). bolt: head = circular edge(s) (shells) or face(s) of the hole on the head side, nut = the same on the nut side (bolt_type nut) or the threaded hole (screw); diameter_mm shank, head_diameter_mm (default 1.6·d), preload_n axial. edge_weld: face1 + face2 (one face of each body) + edges where they meet; Eurocode 3 sizing with ultimate_mpa of the weaker part, βw, γM2; weld_size_mm 0 = SolidWorks estimates the size. pin: faces1/faces2 cylindrical faces of the two parts. After sim_run, sim_results lists connector forces and edge-weld pass/fail. Entity: {\"face_index\"} | {\"edge_index\"} (part) | {\"component\",\"face_index\"|\"edge_index\"} (assembly, indices from analyze_assembly) | {\"component\"} | {\"point_mm\":[x,y,z]} (a point on a face).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "connector_type": "string: 'bolt' | 'edge_weld' | 'pin' (required)",
+    "head": "array (optional, default [])",
+    "nut": "array (optional, default [])",
+    "bolt_type": "string: 'nut' | 'screw' (optional, default \"nut\")",
+    "diameter_mm": "number (optional, default 8.0)",
+    "head_diameter_mm": "number (optional, default 0.0)",
+    "nut_diameter_mm": "number (optional, default 0.0)",
+    "preload_n": "number (optional, default 0.0)",
+    "face1": "object/null (optional, default null)",
+    "face2": "object/null (optional, default null)",
+    "edges": "array (optional, default [])",
+    "weld_type": "string: 'fillet_single' | 'fillet_double' | 'groove_single' | 'groove_double' (optional, default \"fillet_single\")",
+    "weld_size_mm": "number (optional, default 0.0)",
+    "ultimate_mpa": "number (optional, default 360.0)",
+    "correlation_factor": "number (optional, default 0.8)",
+    "partial_safety_factor": "number (optional, default 1.25)",
+    "faces1": "array (optional, default [])",
+    "faces2": "array (optional, default [])",
+    "study": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_contact_set": {
+  "description": "[mm/deg/kg] Local contact pair between two entity sets (overrides the global contact for these faces): no_penetration (parts may separate/slide; friction = coefficient), bonded, free. delete = contact set name. Entity: {\"face_index\"} | {\"edge_index\"} (part) | {\"component\",\"face_index\"|\"edge_index\"} (assembly, indices from analyze_assembly) | {\"component\"} | {\"point_mm\":[x,y,z]} (a point on a face).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "source": "array (optional, default [])",
+    "target": "array (optional, default [])",
+    "contact_type": "string: 'no_penetration' | 'bonded' | 'free' (optional, default \"no_penetration\")",
+    "friction": "number (optional, default 0.0)",
+    "delete": "string (optional, default \"\")",
+    "study": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_mesh_control": {
+  "description": "[mm/deg/kg] Local mesh refinement (сгущение сетки) on faces / edges / whole components: element_size_mm there, growth ratio away from them. Re-mesh afterwards (sim_mesh or sim_run). delete = mesh control name. Entity: {\"face_index\"} | {\"edge_index\"} (part) | {\"component\",\"face_index\"|\"edge_index\"} (assembly, indices from analyze_assembly) | {\"component\"} | {\"point_mm\":[x,y,z]} (a point on a face).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "entities": "array (optional, default [])",
+    "element_size_mm": "number (optional, default 2.0)",
+    "ratio": "number (optional, default 1.5)",
+    "delete": "string (optional, default \"\")",
+    "study": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_options": {
+  "description": "[mm/deg/kg] Static study options: adaptive h (refines the mesh until target_accuracy_pct, max_iterations loops) or p; large_displacement (big deflections of thin sheet); soft_spring / inertial_relief (stabilise a model with no full fixture); solver. Unset = unchanged; returns the current options.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "adaptive": "string/null (optional, default null)",
+    "target_accuracy_pct": "number (optional, default 98.0)",
+    "max_iterations": "integer (optional, default 3)",
+    "large_displacement": "boolean/null (optional, default null)",
+    "soft_spring": "boolean/null (optional, default null)",
+    "inertial_relief": "boolean/null (optional, default null)",
+    "solver": "string/null (optional, default null)",
+    "study": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_copy_study": {
+  "description": "[mm/deg/kg] Duplicate a study with its material, fixtures, loads, connectors and contacts (e.g. to try another load case or mesh) — the copy becomes active.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "new_name": "string (optional, default \"\")",
+    "study": "string (optional, default \"\")",
+    "include_mesh": "boolean (optional, default false)",
+    "include_results": "boolean (optional, default false)",
+    "configuration": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_report": {
+  "description": "[mm/deg/kg] Report of a SOLVED study into out_dir (default <model folder>\\SimReport). engine=html (default): own HTML page — verdict against required_fos (from the stress away from fixtures and loads when the peak sits on one), results table (σ, displacement, FoS with locations), connector forces / weld checks, stress and displacement maps, materials, fixtures, loads, contacts, mesh. hand_checks: [{\"title\": \"Шов плита–стенка\", \"check\": \"weld_check\" | \"bolt_check\" | \"beam_check\", \"args\": {the tool's arguments}}] — computed here and listed with their inputs; a failed one fails the verdict. notes: the assumptions and where the loads come from, one line each. compare_studies: solved copies of the same case on other meshes (sim_copy_study + sim_mesh) → a mesh-sensitivity table; a governing stress that moves > 15 % is named a singularity and an \"ok\" then needs hand_checks. engine=solidworks: SOLIDWORKS' Word report — automates MS Word, which hung after the first report of a session on SW 2024 (then ~2 min and RPC fault); use only if the Word document is required.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "out_dir": "string (optional, default \"\")",
+    "name": "string (optional, default \"\")",
+    "study": "string (optional, default \"\")",
+    "required_fos": "number (optional, default 1.5)",
+    "yield_mpa": "number (optional, default 0.0)",
+    "title": "string (optional, default \"\")",
+    "engine": "string: 'html' | 'solidworks' (optional, default \"html\")",
+    "hand_checks": "array (optional, default [])",
+    "notes": "array (optional, default [])",
+    "compare_studies": "array (optional, default [])"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "bolt_check": {
+  "description": "[mm/deg/kg] Hand check of one bolt (EN 1993-1-8 table 3.4): shear, tension, their interaction and — with plate_t_mm — bearing of the thinnest sheet (e1_mm = edge distance in the load direction). Feed it the shear_n / axial_n resultants of a bolt connector from sim_results. Returns resistances, utilizations, ok.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "diameter_mm": "number (required)",
+    "shear_n": "number (optional, default 0.0)",
+    "axial_n": "number (optional, default 0.0)",
+    "grade": "string: '4.6' | '4.8' | '5.6' | '5.8' | '6.8' | '8.8' | '10.9' | 'A2-70' | 'A4-70' | 'A4-80' (optional, default \"8.8\")",
+    "shear_planes": "integer (optional, default 1)",
+    "threads_in_shear": "boolean (optional, default true)",
+    "plate_t_mm": "number (optional, default 0.0)",
+    "plate_fu_mpa": "number (optional, default 360.0)",
+    "e1_mm": "number (optional, default 0.0)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "weld_check": {
+  "description": "[mm/deg/kg] Hand check of a fillet weld (EN 1993-1-8 simplified method): f_vw,d = f_u/√3/(β_w·γ_M2), utilization = F/(f_vw,d·a·L·sides); a = throat_mm or 0.7·leg_mm. β_w 0.8 S235, 0.85 S275, 0.9 S355. Also returns the minimum throat for this force.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "force_n": "number (required)",
+    "length_mm": "number (required)",
+    "throat_mm": "number (optional, default 0.0)",
+    "leg_mm": "number (optional, default 0.0)",
+    "fu_mpa": "number (optional, default 360.0)",
+    "beta_w": "number (optional, default 0.8)",
+    "sides": "integer (optional, default 1)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "beam_check": {
+  "description": "[mm/deg/kg] Hand check of a beam / bracket arm — an independent cross-check of an FEA result: section properties (rect b×h, rhs b×h×t, pipe d×t, round d, channel/U b×h×t, angle h×b×t; load along h), max moment, bending stress M/W, deflection (cantilever: point load at the end / UDL; simply_supported: mid-span / UDL), utilization vs f_y and span/deflection_limit.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "section": "string: 'rect' | 'rhs' | 'pipe' | 'round' | 'channel' | 'angle' (required)",
+    "span_mm": "number (required)",
+    "load_n": "number (optional, default 0.0)",
+    "udl_n_per_mm": "number (optional, default 0.0)",
+    "support": "string: 'cantilever' | 'simply_supported' (optional, default \"cantilever\")",
+    "b_mm": "number (optional, default 0.0)",
+    "h_mm": "number (optional, default 0.0)",
+    "t_mm": "number (optional, default 0.0)",
+    "d_mm": "number (optional, default 0.0)",
+    "E_mpa": "number (optional, default 210000.0)",
+    "fy_mpa": "number (optional, default 235.0)",
+    "deflection_limit": "number (optional, default 200.0)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "bom_gost": {
+  "description": "[mm/deg/kg] Specification (спецификация) of the ACTIVE assembly per GOST 2.106 form 1, one assembly level: sections Документация / Сборочные единицы / Детали / Стандартные изделия / Прочие изделия / Материалы / Комплекты from the «Раздел» property (else inferred: sub-assembly, part with «Обозначение», name citing ГОСТ/DIN/ISO → standard item, the rest → other items; «Детали» on a part without «Обозначение» that cites a standard or lies in a purchased-items folder is taken as a template default and inferred — moved_from_details lists them), positions through the sections, columns Формат / Зона / Поз. / Обозначение / Наименование / Кол. / Примечание (properties of the same names). assembly_drawing adds «<Обозначение> СБ Сборочный чертёж». xlsx_path → formatted Excel sheet.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "xlsx_path": "string (optional, default \"\")",
+    "assembly_drawing": "boolean (optional, default true)",
+    "max_rows": "integer (optional, default 200)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "insert_bom_table": {
+  "description": "[mm/deg/kg] BOM table on the ACTIVE drawing for the assembly shown in `view` (default: the first assembly view): at the sheet's table anchor (anchor) or at x_mm/y_mm; template default = SolidWorks bom-standard. balloons=True adds auto-balloons to that view, numbered like the BOM. Returns header + first rows.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "view": "string (optional, default \"\")",
+    "bom_type": "string: 'top_level' | 'parts_only' | 'indented' (optional, default \"top_level\")",
+    "anchor": "string: 'top_right' | 'top_left' | 'bottom_right' | 'bottom_left' (optional, default \"top_right\")",
+    "x_mm": "number/null (optional, default null)",
+    "y_mm": "number/null (optional, default null)",
+    "template": "string (optional, default \"\")",
+    "config": "string (optional, default \"\")",
+    "balloons": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "weldment_profiles": {
+  "description": "[mm/deg/kg] Weldment profile library (Tools > Options > File Locations > Weldment Profiles): standards (iso, DIN, GOST …) → types → sizes. A size is either a .SLDLFP file in <standard>\\<type>\\ or a configuration of <standard>\\<type>.SLDLFP (GOST folder). Use as weldment_member(profile='<standard>/<type>/<size>').",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "standard": "string (optional, default \"\")",
+    "type": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "weldment_member": {
+  "description": "[mm/deg/kg] Structural members (сварная конструкция) in the ACTIVE part along sketch segments: profile '<standard>/<type>/<size>' (weldment_profiles) or a .SLDLFP path (+ size = configuration). One group = sketch (+ segments: indices among its non-construction segments, default all), angle_deg (profile rotation), corner treatment at group corners. Several groups: groups=[{sketch, segments, angle_deg, corner, mirror}]. Draw the layout first (create_sketch + lines; 3D frames: several sketches).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "profile": "string (required)",
+    "sketch": "string (optional, default \"\")",
+    "segments": "array (optional, default [])",
+    "size": "string (optional, default \"\")",
+    "angle_deg": "number (optional, default 0.0)",
+    "corner": "string: 'miter' | 'butt1' | 'butt2' | 'none' (optional, default \"miter\")",
+    "groups": "array (optional, default [])"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "weldment_cut_list": {
+  "description": "[mm/deg/kg] Weldment cut list (ведомость резки профиля) of the ACTIVE part: per item qty, description (profile size), length mm, end angles, material, mass; totals per profile (pieces, total length m). csv_path / xlsx_path write files; properties=True adds every cut-list property.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "csv_path": "string (optional, default \"\")",
+    "xlsx_path": "string (optional, default \"\")",
+    "properties": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "weldment_trim": {
+  "description": "[mm/deg/kg] Trim / extend members (bodies by name, analyze_model(bodies)) to other members or to faces (by_faces: face indices). coped = coped cut, gap_mm = weld gap.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "bodies": "array (required)",
+    "by_bodies": "array (optional, default [])",
+    "by_faces": "array (optional, default [])",
+    "corner": "string: 'trim' | 'miter' | 'butt1' | 'butt2' (optional, default \"trim\")",
+    "allow_extension": "boolean (optional, default true)",
+    "coped": "boolean (optional, default false)",
+    "gap_mm": "number (optional, default 0.0)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "weldment_end_cap": {
+  "description": "[mm/deg/kg] End caps (заглушки) on open member end faces (analyze_model(faces) indices); offset_mm = inset from the profile's outer edge, chamfer_mm = corner chamfer.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "face_indices": "array (required)",
+    "thickness_mm": "number (optional, default 5.0)",
+    "offset_mm": "number (optional, default 0.0)",
+    "chamfer_mm": "number (optional, default 0.0)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "weldment_gusset": {
+  "description": "[mm/deg/kg] Gusset (косынка) between two planar faces of members meeting at a corner: legs d1/d2 mm, thickness; polygon shape uses d3/d4 (chamfer).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "face_indices": "array (required)",
+    "thickness_mm": "number (optional, default 5.0)",
+    "d1_mm": "number (optional, default 50.0)",
+    "d2_mm": "number (optional, default 50.0)",
+    "shape": "string: 'triangle' | 'polygon' (optional, default \"triangle\")",
+    "d3_mm": "number (optional, default 10.0)",
+    "d4_mm": "number (optional, default 10.0)",
+    "location": "string: 'center' | 'start' | 'end' (optional, default \"center\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "hole_wizard": {
+  "description": "[Port of Claw256 31deceb, METERS] Place a STANDARD SOLIDWORKS Hole Wizard hole (real counterbore / countersink / clearance / tapped hole with a thread callout) via IFeatureManager.HoleWizard5, at one or more points on a planar face. Target face: face_index (from analyze_model('faces')) OR a point face_x/face_y/face_z ON the face. points: array (or JSON string) of [x,y,z] METER hole centres lying ON that face, e.g. [[0.01,0.05,0]]. hole_type: counterbore | countersink | hole (clearance) | tap (tapped). standard: ansi_inch | ansi_metric | iso | din | jis. fastener_type: omit for the default of that standard + hole_type (ISO: tap 147, clearance 144, cap-screw cbore 139, flat-head csink 140; ANSI metric 43/40/33/35), or pass a swWzdHoleStandardFastenerTypes_e integer. A fastener or size that does not belong to the standard + hole_type FAILS (HOLE_WIZARD_FAILED). size: e.g. 'M6' (metric) or '1/4-20' / '#10-24' (inch tap). Metric tap pitch is added automatically (coarse 'M6' -> 'M6x1.0'; or give 'M6x1'); for non-tap holes a pitch is stripped. end_condition: blind (needs depth) | through_all. depth/diameter in METERS (diameter 0 = the standard's size); cbore_diameter/cbore_depth METERS; csink_diameter METERS and csink_angle DEGREES (included angle); thread_depth METERS (tap only). Ported from Claw256 31deceb (AGPL). Call it AFTER the body exists. On COMPLETED the result carries the created feature name and result_geometry.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "hole_type": "string: 'counterbore' | 'countersink' | 'hole' | 'tap' (required)",
+    "standard": "string: 'ansi_inch' | 'ansi_metric' | 'iso' | 'din' | 'jis' (required)",
+    "size": "string (required)",
+    "points": "string/array (required)",
+    "face_index": "integer (optional, default -1)",
+    "face_x": "number/null (optional, default null)",
+    "face_y": "number/null (optional, default null)",
+    "face_z": "number/null (optional, default null)",
+    "fastener_type": "string/integer (optional, default \"default\")",
+    "end_condition": "string: 'blind' | 'through_all' (optional, default \"blind\")",
+    "depth": "number (optional, default 0.0)",
+    "diameter": "number (optional, default 0.0)",
+    "cbore_diameter": "number (optional, default -1.0)",
+    "cbore_depth": "number (optional, default -1.0)",
+    "csink_diameter": "number (optional, default -1.0)",
+    "csink_angle": "number (optional, default -1.0)",
+    "thread_depth": "number (optional, default -1.0)",
+    "reverse": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "view_images": {
+  "description": "[mm/deg/kg] SEE the model from several sides in one call (default front/top/right/iso, like a drawing's view set): one image per view, returned together (up to 8). A view is a name ('top', '*Named') or an object with view_image's own parameters — {\"view_dir\": [-1,1,-1], \"focus\": [...]}, {\"view\": \"front\", \"section_plane\": \"Right Plane\", \"file_path\": \"...\"}. display / size / focus / isolate here are the defaults for every view. out_dir keeps the PNGs (default: temp).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "views": "array (optional, default [\"front\", \"top\", \"right\", \"iso\"])",
+    "display": "string: 'shaded_edges' | 'shaded' | 'hlr' | 'hlv' | 'wireframe' (optional, default \"shaded_edges\")",
+    "size": "integer (optional, default 400)",
+    "focus": "array (optional, default [])",
+    "isolate": "boolean (optional, default false)",
+    "out_dir": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "add_sketch_text": {
+  "description": "[mm/deg/kg] Text in the ACTIVE sketch (sketch coordinates, mm): part marking / engraving. Then cut it (extrude_feature cut, small depth) or keep the sketch and export it with the flat pattern (export_flat_dxf sketches=True → layer MARK for the laser).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "text": "string (required)",
+    "x_mm": "number (optional, default 0.0)",
+    "y_mm": "number (optional, default 0.0)",
+    "height_mm": "number (optional, default 5.0)",
+    "font": "string (optional, default \"\")",
+    "bold": "boolean (optional, default false)",
+    "angle_deg": "number (optional, default 0.0)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "set_document_units": {
+  "description": "[mm/deg/kg] Units of the ACTIVE document (custom unit system): length unit, decimal places, angle unit.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "length": "string: 'mm' | 'cm' | 'm' | 'in' (optional, default \"mm\")",
+    "decimals": "integer/null (optional, default null)",
+    "angle": "string/null (optional, default null)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "move_drawing_view": {
+  "description": "[mm/deg/kg] Move a view of the ACTIVE drawing to x_mm/y_mm on the sheet (view centre) and/or set its scale (0.5 = 1:2). Returns the new position.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "view": "string (required)",
+    "x_mm": "number/null (optional, default null)",
+    "y_mm": "number/null (optional, default null)",
+    "scale": "number/null (optional, default null)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "tool_help": {
+  "description": "[mm/deg/kg] Reference for this server: full description + parameters of any tool (topic = tool name), topic guides (start, units, assemblies, sheet_metal, simulation, weldments, drawings, reading_drawings, rules) or a search word. Empty topic = the guide list and every tool with one line, the tools of groups that are off too (they run through execute_batch). Descriptions ending with '[full: …]' were shortened.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "topic": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sim_crosscheck": {
+  "description": "[mm/deg/kg] Independent check of a SOLVED static study with CalculiX on the SAME mesh: exports the mesh, builds a CalculiX deck (fixed = the study's fixed faces, loads = [{\"faces\": [...], \"force_n\": [fx, fy, fz]}] — the same as in sim_add_load), solves it with ccx and compares max displacement / von Mises with SolidWorks → evidence status pass / warn / blocked / failed (never a made-up number). Solid meshes (C3D4/C3D10) or sheet-metal shells (S6 with each shell's thickness — a draft mesh gets midside nodes, CalculiX's S3 locks in bending; nodal surface stress); a mesh mixing both, or pieces joined only by contacts, is blocked. ccx is found via SWMCP_CCX, PATH or PrePoMax / bConverged / FreeCAD folders; without it the deck is still written (status blocked). Entity specs as in sim_add_fixture.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "fixed": "array (required)",
+    "loads": "array (required)",
+    "study": "string (optional, default \"\")",
+    "out_dir": "string (optional, default \"\")",
+    "disp_tol": "number (optional, default 0.15)",
+    "stress_tol": "number (optional, default 0.35)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "create_weldment_profiles": {
+  "description": "[mm/deg/kg] Weldment profiles the SolidWorks library lacks: GOST equal angles 8509-93 (20x20x3 … 100x100x8), channels 8240-97 series П (5П … 20П), seamless pipes 8732-78 (25x3 … 159x6) — one .SLDLFP per size in <out_dir>/GOST/<type>/ (default %USERPROFILE%/SolidWorksMCP/weldment profiles, searched by weldment_member). sizes = subset (e.g. [\"40x40x4\"], [\"10П\"]), default all. Section data = reference values — check them.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "kind": "string: 'angle' | 'channel' | 'pipe' (required)",
+    "sizes": "array (optional, default [])",
+    "out_dir": "string (optional, default \"\")",
+    "overwrite": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "import_step": {
+  "description": "[mm/deg/kg] A manufacturer's STEP / IGES (often a whole assembly) → ONE multibody .SLDPRT (default: next to the file, same name) — not an assembly with a file per component. Native bodies (3D Interconnect off), the imported document is closed without saving, the translator's .err log goes into the answer. Reports the bodies of the STEP vs the part (warning if fewer), surface bodies = pieces the translator could not knit into solids. inspect_only=True only reports what the file contains.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "file_path": "string (required)",
+    "out_path": "string (optional, default \"\")",
+    "overwrite": "boolean (optional, default false)",
+    "inspect_only": "boolean (optional, default false)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "import_step_folder": {
+  "description": "[mm/deg/kg] import_step for every STEP in a folder (sub-folders too): a .SLDPRT next to each file, existing ones are skipped unless overwrite. Long — answers {\"running\": true, \"job_id\": …}; job_result gives per-file results and totals.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "folder": "string (required)",
+    "recursive": "boolean (optional, default true)",
+    "overwrite": "boolean (optional, default false)",
+    "extensions": "array (optional, default [\".step\", \".stp\"])",
+    "max_files": "integer (optional, default 500)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "enable_tools": {
+  "description": "[mm/deg/kg] Turn on tool groups that are off (they stay on in the next sessions while you use them). Their tools appear in your tool list once your client re-reads it — some clients only in the next session; a tool of a group that is off always runs through execute_batch(steps=[{\"tool\": …, \"args\": …}]), which turns its group on by itself. Groups: sheet_metal, simulation, drawings (views, sections, dimensions, BOM table, reading a drawing), weldments (profiles, members, cut list), assemblies. tool_help('<tool>') says which group a tool is in and gives its parameters.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "groups": "array (required)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "form_subassembly": {
+  "description": "[mm/deg/kg] Move components of the ACTIVE assembly into a subassembly (SolidWorks' Form New Subassembly): a NEW .SLDASM at file_path, inserted at the parent's origin and fixed (coordinates do not change), or `into` an existing subassembly component. Positions are kept; mates among the moved components move along, mates to the rest stay in the parent. The components must sit on one level; a suppressed one is resolved for the move (reported). The subassembly file is saved, the parent is left modified — save_document keeps it. Answers subassembly, moved, max_shift_mm, mates_moved.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "components": "array (required)",
+    "file_path": "string (optional, default \"\")",
+    "into": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "define_sketch": {
+  "description": "[mm/deg/kg] Make a sketch FULLY DEFINED (black in SolidWorks) WITHOUT changing its shape, so its sizes can be edited (modify_dimension, a double-click in SolidWorks) and it rebuilds predictably. Three steps: 1. relations the geometry already satisfies exactly — shared end points coincident, lines along an axis horizontal / vertical, a point at the origin on it; 2. YOUR design dimensions at their current values — dimensions: [{px, py, entity_type?: 'segment'|'point', to_origin?, orientation?: 'auto'|'horizontal'|'vertical'}], picked like add_dimension (sketch frame, mm): the sizes a designer puts on the drawing (overall width and height, a hole's diameter and its position from an edge or the origin, a slot width); 3. auto=True: SolidWorks' Fully Define Sketch adds what is still missing (dimensions from the sketch origin, scheme baseline | chain | ordinate). A step that moves the geometry, over-defines the sketch or repeats a size is undone and listed in `skipped`. Call it once per sketch, after the shape is drawn and before the feature; on the open sketch, or sketch_name (opened and closed again). It never changes a size — add_dimension(value) / modify_dimension do. Answers status, free_segments (what is still blue), relations_added, dimensions_added, design_dimensions, max_shift_mm, skipped. A profile takes 1-6 s; a sketch of ~100 segments a minute or more (auto).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "sketch_name": "string (optional, default \"\")",
+    "dimensions": "array (optional, default [])",
+    "auto": "boolean (optional, default true)",
+    "scheme": "string: 'baseline' | 'chain' | 'ordinate' (optional, default \"baseline\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "delete_components": {
+  "description": "[mm/deg/kg] Delete components of the ACTIVE assembly in ONE operation (one selection, one rebuild — dozens in seconds; their mates go with them). names = exact names from list_components; prefix = every component whose full name starts with it ('Винт М6' at the top level, 'Sub-1/Винт' inside Sub-1). Answers deleted_count, deleted, not_deleted.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "names": "array (optional, default [])",
+    "prefix": "string (optional, default \"\")"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "sketch_modify": {
+  "description": "[mm/deg/kg] Change an EXISTING sketch in one call, then rebuild — instead of piling new features over a profile. In order: delete_all=True removes every segment (construction lines stay unless keep_construction=False) — a REPLACE when add_segments follows; delete_near = [[x, y], …] removes the segment passing each point; move_points = [[from_x, from_y, to_x, to_y], …] moves sketch points (a point held by a dimension or relation stays — reported in not_moved); add_segments = records exactly like add_sketch_entities. All in mm, SKETCH coordinates (analyze_model(sketch, name) shows them). Answers deleted / moved / added, sketch_status and features_with_errors (features that fail after the change — fix or delete them).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "sketch_name": "string (required)",
+    "delete_all": "boolean (optional, default false)",
+    "delete_near": "array (optional, default [])",
+    "move_points": "array (optional, default [])",
+    "add_segments": "array (optional, default [])",
+    "keep_construction": "boolean (optional, default true)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "unreferenced_files": {
+  "description": "[mm/deg/kg] Model files (.sldprt / .sldasm) under `folder` that none of the `roots` (top assemblies, full paths) uses — read from the files' references on disk, nothing is opened. exclude = path fragments to skip (e.g. a library folder). Also drawings_of_unreferenced: drawings whose models are all unused. Paths relative to folder.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "folder": "string (required)",
+    "roots": "array (required)",
+    "exclude": "array (optional, default [])"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "list_materials": {
+  "description": "[mm/deg/kg] Materials in SolidWorks' material databases: name, library, class. query = words that must all appear (\"6061\", \"nylon\", \"aisi 304\"). set_part_material takes the exact name (and its library).",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "query": "string (optional, default \"\")",
+    "limit": "integer (optional, default 40)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "layout_drawing_views": {
+  "description": "[mm/deg/kg] Arrange the views of the ACTIVE sheet: front view as the main one, the others in projection relation to it (first angle — GOST/ISO E: top view below, left view on the right; third angle — top above, right view on the right; auto = the sheet's own setting), lined up on the views' own points; isometric, sections, details and flat patterns in the free cells of that block, then a column on its right (a section's projection link is removed — it stands by its label). Each view's box counts its dimension texts and, for a labelled view, the label SolidWorks keeps above it (~28 mm). No overlaps, inside the frame (margins_mm [left, bottom, right, top], default GOST 2.301: 20, 5, 5, 5), clear of the title block (title_block_mm [w, h] in the bottom right corner, default 185 × 55) and of the sheet's own notes and signs (technical requirements, roughness). scale: \"fit\" = the largest standard scale (GOST 2.302) at which it all fits — set as the SHEET's scale (the title block shows it, the views use it); \"keep\"; or a ratio \"1:2\". Tables are not avoided. arrange (default True) sets the dimensions off the geometry again after a scale change (Auto Arrange). Returns each view's box, the scale and fits / overlaps.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "scale": "string (optional, default \"fit\")",
+    "projection": "string: 'auto' | 'first' | 'third' (optional, default \"auto\")",
+    "gap_mm": "number (optional, default 15.0)",
+    "margins_mm": "array (optional, default [])",
+    "title_block_mm": "array (optional, default [])",
+    "arrange": "boolean (optional, default true)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "dedupe_drawing_dimensions": {
+  "description": "[mm/deg/kg] Remove repeated dimensions on the ACTIVE drawing: auto_dimension_drawing puts one model dimension into every view that can show it, while a drawing gives each size once. Each model dimension shown in several views is kept in the best one — front, top, left / right, section, detail, the rest; isometric last — and its copies are deleted from the drawing (the model is not touched). Also one size given twice in a view by two sketches (same kind, value and measured points — the profile's 170 and the holes' 170): the first stays. Dimensions made in the drawing are left alone. arrange (default True) closes up the stacks afterwards. dry_run lists what would go.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "dry_run": "boolean (optional, default false)",
+    "arrange": "boolean (optional, default true)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ },
+ "add_dimension_between": {
+  "description": "[mm/deg/kg] Drawing dimension BETWEEN two entities of one view (edge – edge, hole circle – edge, vertex – vertex …): a point ON each. With `view` the points (and text) are in that view's own frame, model mm — exactly the coordinates check_drawing(include_geometry) lists for its lines / circles; without it they are sheet mm. orientation horizontal / vertical measures along the sheet's X / Y; auto lets SolidWorks choose (parallel edges → their distance, two circles → centre distance). Text default: 12 mm above (right of, for vertical) the pair. Returns the value in mm (deg) and the sheet points used.",
+  "input": {
+   "operation_id": "string (required, unique idempotency key)",
+   "state_version": "integer (required, must match current execution state)",
+   "params": {
+    "x1_mm": "number (required)",
+    "y1_mm": "number (required)",
+    "x2_mm": "number (required)",
+    "y2_mm": "number (required)",
+    "view": "string (optional, default \"\")",
+    "orientation": "string: 'auto' | 'horizontal' | 'vertical' (optional, default \"auto\")",
+    "text_x_mm": "number/null (optional, default null)",
+    "text_y_mm": "number/null (optional, default null)"
+   }
+  },
+  "output": "-> execution-response.json; payload in result_geometry (JSON object)"
+ }
+}

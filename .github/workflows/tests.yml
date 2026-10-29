@@ -1,0 +1,28 @@
+name: tests
+
+# No SolidWorks on the runner: adapter (MCP schema <-> contract, client, error mapping, tool surface) and
+# drawing-dialect tests only. Live SolidWorks checks: tools/run_steps.py tools/smoke_test.json and tools/golden.py locally.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python-tests:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]   # README promises 3.11+; install.ps1 users mostly have the newest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: python -m pip install -r adapters/claude/requirements.txt pytest ruff
+      - name: Lint (pyflakes on the adapter; undefined names and redefinitions everywhere)
+        run: |
+          python -m ruff check --select F adapters/claude
+          python -m ruff check --select F821,F811,F823 adapters tools cad-planner
+      - name: Tests
+        run: python -m pytest -q adapters/claude/tests cad-planner/drawing/tests
